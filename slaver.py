@@ -100,7 +100,8 @@ def main():
                 master_sock = open_sock(master_addr)
                 connection_pool.append(master_sock)
                 t = threading.Thread(target=wait_and_response_verify,
-                                     args=(master_sock, connection_pool))
+                                     args=(master_sock, connection_pool),
+                                     daemon=True)
                 t.start()
             else:
                 sleep(0.2)
