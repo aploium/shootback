@@ -93,6 +93,8 @@ def wait_and_response_hello(master_sock, connection_pool):
 
 def main():
     connection_pool = deque()
+    infoprint('Master:', master_addr)
+    infoprint('Target:', slaver_target_addr)
     while True:
         try:
             if len(connection_pool) < slaver_unused_connection_pool_size:

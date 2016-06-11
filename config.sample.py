@@ -81,4 +81,4 @@ verbose_level = 2
 # unused connect timeout seconds.
 # if time exceed, master will close this connection if it is not in use.
 # connections in use do not have timeout.
-SLAVER_CONNECTION_TTL = 120
+SLAVER_CONNECTION_TTL = 180

@@ -101,7 +101,7 @@ def local_listen(local_listen_addr, slaver_pool):
     s.bind(local_listen_addr)
     s.listen(master_connection_pool_size)
 
-    infoprint('LocalListening', local_listen_addr)
+    infoprint('OutboundListening', local_listen_addr, 'users should connect to this addr')
     while True:
         try:
             client_sock, addr = s.accept()
@@ -122,10 +122,9 @@ def local_listen(local_listen_addr, slaver_pool):
                 t = threading.Thread(target=send_hello_and_transfer, args=(client_sock, slaver_pool))
                 t.start()
         except Exception as e:
-            errprint('LocalListenErr', e)
+            errprint('OutboundListeningErr', e, 'retry after 1 second')
             traceback.print_exc()
             sleep(1)
-        pass
 
 
 def remote_listen(remote_listen_addr, slaver_pool):
@@ -137,7 +136,7 @@ def remote_listen(remote_listen_addr, slaver_pool):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind(remote_listen_addr)
     s.listen(master_connection_pool_size)
-    infoprint('RemoteListening', remote_listen_addr)
+    infoprint('InboundListening', remote_listen_addr, 'slavers should connect to this addr')
     while True:
         try:
             sock, addr = s.accept()
@@ -147,7 +146,7 @@ def remote_listen(remote_listen_addr, slaver_pool):
                 # t = threading.Thread(target=duplex_data_transfer, args=(up_sock, up_addr, dwn_sock))
                 # t.start()
         except Exception as e:
-            errprint('RemoteListenErr', e)
+            errprint('RemoteListenErr', e, 'retry after 1 second')
             traceback.print_exc()
 
 
@@ -169,7 +168,6 @@ def ttl_checker(slaver_pool):
                     close_socket(slaver[0])
                 except Exception as e:
                     dbgprint('SlaverAlreadyClosed', e)
-                    pass
                 break
         if try_remove_connection_from_pool(slaver_pool, slaver_to_remove):
             sleep(0.5)
@@ -191,4 +189,3 @@ if __name__ == '__main__':
     main()
     while True:
         sleep(10)
-    os._exit(1)

@@ -181,7 +181,7 @@ def duplex_data_transfer(up_sock, dwn_sock, connect_pool=None, this_socket=None,
     :type up_sock: socket.socket
     :type dwn_sock: socket.socket
     """
-    infoprint('Transfer:', up_sock.getpeername(), 'AND', dwn_sock.getpeername(), first_is_compress)
+    infoprint('Transfer between', up_sock.getpeername(), 'and', dwn_sock.getpeername(), first_is_compress)
     try:
         t_ud = threading.Thread(
             target=simplex_data_transfer, args=(up_sock, dwn_sock),
