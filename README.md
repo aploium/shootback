@@ -57,5 +57,5 @@ Besides directly connect to the target (website, ftp, etc..), we can use other n
 `(same as the former) <--> slaver_machine <--> Socks5 Proxy (maybe in slaver_machine) <--> Real target`  
   
 #### Tips2:  Load balance with many salvers
-If we have more than on slaver machines, just copy the cfg and run then in every salver machines. Due to the internal slaver queue mechanism, load balance will be applied automatically  
+If you have more than one slave machine, just copy the cfg and run them in every salve machine. Due to the internal slaver queue mechanism, load balance will be applied automatically  
 
