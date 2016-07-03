@@ -1,4 +1,4 @@
-# PyReverseTcpTunnel
+# shootback
 A fast and reliable reverse TCP tunnel, designed to be multi clients/users and hold high concurrency (support Gzip in transmission).  
 It also can be used as reverse socks/http/ftp/smtp... proxy, anything as long as is use TCP!
 Help you to bypass firewall or NAT to access the LAN.  

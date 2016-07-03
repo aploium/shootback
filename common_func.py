@@ -1,6 +1,6 @@
 # coding=utf-8
 """
-PyReverseTcpTunnel: a fast and reliable tunnel implant Gzip and AES
+shootback: a fast and reliable tunnel implant Gzip and AES
 """
 import socket
 import traceback

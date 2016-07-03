@@ -1,5 +1,5 @@
 # coding=utf-8
-# PyReverseTcpTunnel: a fast and reliable reverse tcp tunnel implant Gzip and AES
+# shootback: a fast and reliable reverse tcp tunnel implant Gzip and AES
 
 # Brief explain about the reverse tcp proxy:
 # Master will listen 127.0.0.1:1088 and 0.0.0.0:20822
