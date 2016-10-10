@@ -3,6 +3,9 @@ A fast and reliable reverse TCP tunnel, designed to be multi clients/users and h
 It also can be used as reverse socks/http/ftp/smtp... proxy, anything as long as is use TCP!
 Help you to bypass firewall or NAT to access the LAN.  
 Python反向TCP隧道代理, 用于NAT或防火墙后的内网机器与外网建立TCP隧道.   
+
+适用于如下情景: 内网机器A可以访问internet上的B, 但是B无法访问A. 需求为让B能直接访问A  
+
 (Only support Python 3, for now)  
  
 ## Features 特性 
