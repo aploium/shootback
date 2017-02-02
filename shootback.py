@@ -74,7 +74,6 @@ class SocketBridge:
         if conn is not None:
             try_close(conn)
             self.conn[conn_no] = None  # 移除掉socket
-            del conn
 
     def _rd_closed(self, conn_no):
         self._base_closed(conn_no)
@@ -93,7 +92,10 @@ class SocketBridge:
                 pass
 
     def _rd_shutdowned(self, conn_no):
-        self.conn[conn_no].shutdown(socket.SHUT_RD)
+        try:
+            self.conn[conn_no].shutdown(socket.SHUT_RD)
+        except:
+            pass
         if self.conn[1 - conn_no] is not None:
             try:
                 self.conn[1 - conn_no].shutdown(socket.SHUT_WR)
@@ -380,6 +382,7 @@ class Master:
             return False
 
         pkg, verify = CtrlPkg.decode_verify(buff, CtrlPkg.PTYPE_HEART_BEAT)
+
         return verify
 
     def _heart_beat_daemon(self):
@@ -407,7 +410,7 @@ class Master:
             if not hb:
                 log.warning("heart beat failed: {}".format(slaver["addr_slaver"]))
                 del slaver["conn_slaver"]
-                del slaver
+
             else:
                 log.debug("heart beat success: {}".format(slaver["addr_slaver"]))
                 self.slaver_pool.append(slaver)
@@ -452,8 +455,7 @@ class Master:
             else:
                 log.warning("slaver handshake failed: {}".format(dict_slaver["addr_slaver"]))
                 try_close(conn_slaver)
-                del conn_slaver
-                del dict_slaver
+
                 time.sleep(0.05)
                 return None
 
@@ -472,7 +474,7 @@ class Master:
                 log.warning("Closing customer[{}] because no available slaver found".format(
                     addr_customer))
                 try_close(conn_customer)
-                del conn_customer
+
                 continue
 
             self.working_pool[addr_customer] = {
@@ -491,8 +493,9 @@ class Master:
             except:
                 try:
                     try_close(conn_customer)
-                    del conn_customer
+
                     del self.thread_pool["customer"][addr_customer]
+
                 except:
                     pass
                 continue
@@ -541,12 +544,8 @@ class Slaver:
     def _waiting_handshake(self, conn_slaver):
         while True:  # 可能会有一段时间的心跳包
 
-            rlist, _, elist = select.select([conn_slaver], [], [conn_slaver], SPARE_SLAVER_TTL)
-            if not rlist or elist:
-                # 超时或出错
-                return False
+            buff = select_recv(conn_slaver, CtrlPkg.PACKAGE_SIZE, SPARE_SLAVER_TTL)
 
-            buff = conn_slaver.recv(CtrlPkg.PACKAGE_SIZE)
             pkg, verify = CtrlPkg.decode_verify(buff)  # type: CtrlPkg,bool
 
             if not verify:
@@ -556,6 +555,7 @@ class Slaver:
 
             if pkg.pkg_type == CtrlPkg.PTYPE_HEART_BEAT:
                 # 心跳包
+
                 try:
                     conn_slaver.send(CtrlPkg.pbuild_heart_beat().raw)
                 except:
@@ -563,6 +563,7 @@ class Slaver:
 
             elif pkg.pkg_type == CtrlPkg.PTYPE_HS_M2S:
                 # 拿到了开始传输的握手包, 进入工作阶段
+
                 break
 
         try:
@@ -586,7 +587,7 @@ class Slaver:
             log.warning("bad handshake from: {}".format(addr_master))
             del self.spare_slaver_pool[addr_slaver]
             try_close(conn_slaver)
-            del conn_slaver
+
             log.warning("a slaver[{}] abort due to handshake error or timeout".format(addr_slaver))
             return
         else:
@@ -598,7 +599,7 @@ class Slaver:
         except:
             log.error("unable to connect target")
             try_close(conn_slaver)
-            del conn_slaver
+
             del self.working_pool[addr_slaver]
             return
         self.working_pool[addr_slaver]["conn_target"] = conn_target
@@ -649,6 +650,7 @@ class Slaver:
             except:
                 log.error("unable create Thread:\n {}".format(traceback.format_exc()))
                 time.sleep(err_delay)
+
                 if err_delay < MAX_ERR_DELAY:
                     err_delay += 1
                 continue
