@@ -40,6 +40,15 @@ def try_close(closable):
         pass
 
 
+def select_recv(conn, size, timeout=None):
+    rlist, _, elist = select.select([conn], [], [conn], timeout)
+    if not rlist or elist:
+        # 超时或出错
+        return None
+
+    return conn.recv(size)
+
+
 class SocketBridge:
     def __init__(self, conn1: socket.SocketType, conn2):
         self.conn = [conn1, conn2]
@@ -70,17 +79,26 @@ class SocketBridge:
     def _rd_closed(self, conn_no):
         self._base_closed(conn_no)
         if self.conn[1 - conn_no] is not None:
-            self.conn[1 - conn_no].shutdown(socket.SHUT_WR)
+            try:
+                self.conn[1 - conn_no].shutdown(socket.SHUT_WR)
+            except:
+                pass
 
     def _wr_closed(self, conn_no):
         self._base_closed(conn_no)
         if self.conn[1 - conn_no] is not None:
-            self.conn[1 - conn_no].shutdown(socket.SHUT_RD)
+            try:
+                self.conn[1 - conn_no].shutdown(socket.SHUT_RD)
+            except:
+                pass
 
     def _rd_shutdowned(self, conn_no):
         self.conn[conn_no].shutdown(socket.SHUT_RD)
         if self.conn[1 - conn_no] is not None:
-            self.conn[1 - conn_no].shutdown(socket.SHUT_WR)
+            try:
+                self.conn[1 - conn_no].shutdown(socket.SHUT_WR)
+            except:
+                pass
 
     def _simplex_transfer(self, from_no):
         conn_from = self.conn[from_no]
@@ -117,29 +135,42 @@ class SocketBridge:
         return self.__str__()
 
 
-class HandshakePackage:
+class CtrlPkg:
     """
 
-    握手包结构 总长64bytes
+    控制包结构 总长64bytes      CtrlPkg.FORMAT_PKG
     使用 big-endian
 
     体积   名称        数据类型           描述
-    1    pkg_ver       char         握手包版本, 目前只能为 0x01
-    1    pkg_type       char           包类型 *1
+    1    pkg_ver       char         版本, 目前只能为 0x01
+    1    pkg_type    signed char        包类型 *1
     2    prgm_ver    unsigned short    程序版本 *2
-    8      N/A         padding          预留
-    4    crc32_sec   unsigned int     CRC32 *3
-    48     N/A        padding          预留
+    20      N/A       padding          预留
+    40    data        bytes           数据区 *3
 
-    *1: 包类型:
-        0x00: 预留
-        0x01: Master-->Slaver 的握手包
-        0x02: Slaver-->Master 的握手响应包
+    *1: 包类型. 除心跳外, 所有负数包代表由Slaver发出, 正数包由Master发出
+        -1: Slaver-->Master 的握手响应包       PTYPE_HS_S2M
+         0: 心跳包                            PTYPE_HEART_BEAT
+        +1: Master-->Slaver 的握手包          PTYPE_HS_M2S
 
     *2: 默认即为 INTERNAL_VERSION
 
-    *3: 此处的CRC32, 对 Master-->Slaver 来说是 CRC32(SECRET_KEY)
-                  而对 Slaver-->Master  来说是 CRC32(Reversed(SECRET_KEY))
+    *3: 数据区中的内容由各个类型的包自身定义
+
+    -------------- 数据区定义 ------------------
+    包类型: -1 (Slaver-->Master 的握手响应包)
+        体积   名称           数据类型         描述
+         4    crc32_s2m   unsigned int     简单鉴权用 CRC32(Reversed(SECRET_KEY))
+       其余为空
+       *注意: -1握手包是把 SECRET_KEY 字符串翻转后取CRC32, +1握手包不预先反转
+
+    包类型: 0 (心跳)
+       数据区为空
+
+    包理性: +1 (Master-->Slaver 的握手包)
+        体积   名称           数据类型         描述
+         4    crc32_m2s   unsigned int     简单鉴权用 CRC32(SECRET_KEY)
+       其余为空
 
     """
     PACKAGE_SIZE = 2 ** 6  # 64 bytes
@@ -148,90 +179,119 @@ class HandshakePackage:
     SECRET_KEY_CRC32 = binascii.crc32(SECRET_KEY.encode('utf-8')) & 0xffffffff
     SECRET_KEY_REVERSED_CRC32 = binascii.crc32(SECRET_KEY[::-1].encode('utf-8')) & 0xffffffff
 
-    # type
-    TYPE_HANDSHAKE_MASTER_TO_SLAVER = b'\x01'
-    TYPE_HANDSHAKE_SLAVER_TO_MASTER = b'\x02'
+    # Package Type
+    PTYPE_HS_S2M = -1  # Handshake Slaver to Master
+    PTYPE_HEART_BEAT = 0  # 心跳
+    PTYPE_HS_M2S = +1  # Handshake Master to Slaver
 
-    # format
-    FORMAT = "!c c H 8x I 48x"
+    # formats
+    FORMAT_PKG = "!c b H 20x 40s"
+    FORMATS_DATA = {
+        PTYPE_HS_S2M: "I 36x",
+        PTYPE_HEART_BEAT: "40x",
+        PTYPE_HS_M2S: "I 36x",
+    }
 
-    def __init__(self, pkg_ver=b'\x01', pkg_type=b'\x00',
-                 prgm_ver=INTERNAL_VERSION, crc32_sec=0,
-                 content=None
+    def __init__(self, pkg_ver=b'\x01', pkg_type=0,
+                 prgm_ver=INTERNAL_VERSION, data=(),
+                 raw=None,
                  ):
         self.pkg_ver = pkg_ver
         self.pkg_type = pkg_type
         self.prgm_ver = prgm_ver
-        self.crc32_sec = crc32_sec
-        if content:
-            self.content = content
+        self.data = data
+        if raw:
+            self.raw = raw
         else:
             self._build_bytes()
 
     def _build_bytes(self):
-        self.content = struct.pack(
-            self.FORMAT,
+        self.raw = struct.pack(
+            self.FORMAT_PKG,
             self.pkg_ver,
             self.pkg_type,
             self.prgm_ver,
-            self.crc32_sec,
+            self.data_encode(self.pkg_type, self.data),
         )
+
+    @classmethod
+    def data_decode(cls, ptype, data_raw):
+        return struct.unpack(cls.FORMATS_DATA[ptype], data_raw)
+
+    @classmethod
+    def data_encode(cls, ptype, data):
+        return struct.pack(cls.FORMATS_DATA[ptype], *data)
 
     def verify(self, pkg_type=None):
         if pkg_type is not None and self.pkg_type != pkg_type:
             return False
 
-        if self.pkg_type == self.TYPE_HANDSHAKE_MASTER_TO_SLAVER:
-            return self.crc32_sec == self.SECRET_KEY_CRC32
+        elif self.pkg_type == self.PTYPE_HS_S2M:
+            # Slaver-->Master 的握手响应包
+            return self.data[0] == self.SECRET_KEY_REVERSED_CRC32
 
-        elif self.pkg_type == self.TYPE_HANDSHAKE_SLAVER_TO_MASTER:
-            return self.crc32_sec == self.SECRET_KEY_REVERSED_CRC32
+        elif self.pkg_type == self.PTYPE_HEART_BEAT:
+            # 心跳
+            return True
+
+        elif self.pkg_type == self.PTYPE_HS_M2S:
+            # Master-->Slaver 的握手包
+            return self.data[0] == self.SECRET_KEY_CRC32
 
         else:
             return True
 
     @classmethod
-    def decode_only(cls, content):
-        if len(content) != cls.PACKAGE_SIZE:
+    def decode_only(cls, raw):
+        if len(raw) != cls.PACKAGE_SIZE:
             raise ValueError("content size should be {}, but {}".format(
-                cls.PACKAGE_SIZE, len(content)
+                cls.PACKAGE_SIZE, len(raw)
             ))
-        pkg_ver, pkg_type, prgm_ver, crc32_sec = struct.unpack(cls.FORMAT, content)
+        pkg_ver, pkg_type, prgm_ver, data_raw = struct.unpack(cls.FORMAT_PKG, raw)
+        data = cls.data_decode(pkg_type, data_raw)
+
         return cls(
             pkg_ver=pkg_ver, pkg_type=pkg_type,
-            prgm_ver=prgm_ver, crc32_sec=crc32_sec,
-            content=content,
+            prgm_ver=prgm_ver,
+            data=data,
+            raw=raw,
         )
 
     @classmethod
-    def decode_verify(cls, content, pkg_type=None):
+    def decode_verify(cls, raw, pkg_type=None):
         try:
-            pkg = cls.decode_only(content)
+            pkg = cls.decode_only(raw)
         except:
             return None, False
         else:
             return pkg, pkg.verify(pkg_type=pkg_type)
 
     @classmethod
-    def build_master_to_slaver(cls):
+    def pbuild_hs_m2s(cls):
         return cls(
-            pkg_type=cls.TYPE_HANDSHAKE_MASTER_TO_SLAVER,
-            crc32_sec=cls.SECRET_KEY_CRC32,
+            pkg_type=cls.PTYPE_HS_M2S,
+            data=(cls.SECRET_KEY_CRC32,),
         )
 
     @classmethod
-    def build_slaver_to_master(cls):
+    def pbuild_hs_s2m(cls):
         return cls(
-            pkg_type=cls.TYPE_HANDSHAKE_SLAVER_TO_MASTER,
-            crc32_sec=cls.SECRET_KEY_REVERSED_CRC32,
+            pkg_type=cls.PTYPE_HS_S2M,
+            data=(cls.SECRET_KEY_REVERSED_CRC32,),
+        )
+
+    @classmethod
+    def pbuild_heart_beat(cls):
+        return cls(
+            pkg_type=cls.PTYPE_HEART_BEAT,
         )
 
     def __str__(self):
-        return """HandshakePackage<pkg_ver: {} pkg_type:{} prgm_ver:{} crc32_sec:{}>""".format(
+        return """CtrlPkg<pkg_ver: {} pkg_type:{} prgm_ver:{} data:{}>""".format(
             self.pkg_ver,
             self.pkg_type,
             self.prgm_ver,
-            self.crc32_sec
+            self.data,
         )
 
     def __repr__(self):
@@ -267,40 +327,33 @@ class Master:
             name="listen_customer-{}".format(fmt_addr(self.customer_listen_addr)),
         )
 
+        self.thread_pool["heart_beat_daemon"] = threading.Thread(
+            target=self._heart_beat_daemon,
+            name="heart_beat_daemon-{}".format(fmt_addr(self.customer_listen_addr)),
+        )
+
         self.working_pool = working_pool or {}
 
     def start_daemon(self):
         if not self.external_slaver:
             self.thread_pool["listen_slaver"].start()
+        self.thread_pool["heart_beat_daemon"].start()
         self.thread_pool["listen_customer"].start()
 
     def join(self):
         if not self.external_slaver:
             self.thread_pool["listen_slaver"].join()
+        self.thread_pool["heart_beat_daemon"].join()
         self.thread_pool["listen_customer"].join()
-
-    def _handshake(self, conn_slaver):
-        conn_slaver.send(HandshakePackage.build_master_to_slaver().content)
-
-        rlist, _, elist = select.select([conn_slaver], [], [conn_slaver], 1)
-        if not rlist or elist:
-            # 超时或出错
-            return False
-
-        buff = conn_slaver.recv(HandshakePackage.PACKAGE_SIZE)
-        pkg, verify = HandshakePackage.decode_verify(buff, HandshakePackage.TYPE_HANDSHAKE_SLAVER_TO_MASTER)
-
-        log.debug("HsPkg from {}: {}".format(conn_slaver.getpeername(), pkg))
-
-        return verify
 
     def _serving_customer(self, conn_customer, conn_slaver):
         addr_customer = conn_customer.getpeername()
 
-        SocketBridge(conn_customer, conn_slaver).duplex_transfer()
-
-        del self.thread_pool["customer"][addr_customer]
-        del self.working_pool[addr_customer]
+        try:
+            SocketBridge(conn_customer, conn_slaver).duplex_transfer()
+        finally:
+            del self.thread_pool["customer"][addr_customer]
+            del self.working_pool[addr_customer]
 
         log.info("customer complete: {}".format(addr_customer))
 
@@ -318,12 +371,72 @@ class Master:
                 addr, len(self.slaver_pool)
             ))
 
+    @staticmethod
+    def _is_heart_beat_alive(conn_slaver):
+        conn_slaver.send(CtrlPkg.pbuild_heart_beat().raw)
+
+        buff = select_recv(conn_slaver, CtrlPkg.PACKAGE_SIZE, 2)
+        if buff is None:
+            return False
+
+        pkg, verify = CtrlPkg.decode_verify(buff, CtrlPkg.PTYPE_HEART_BEAT)
+        return verify
+
+    def _heart_beat_daemon(self):
+        default_delay = 5 + SPARE_SLAVER_TTL // 5
+        delay = default_delay
+        log.info("heart beat daemon start, delay: {}s".format(delay))
+        while True:
+            time.sleep(delay)
+            log.debug("heart_beat_daemon: hello! im weak")
+
+            slaver_count = len(self.slaver_pool)
+            if not slaver_count:
+                log.warning("heart_beat_daemon: sorry, no slaver available, keep sleeping")
+                delay = default_delay
+                continue
+            else:
+                delay = 1 + SPARE_SLAVER_TTL // (slaver_count + 1)
+
+            slaver = self.slaver_pool.popleft()
+
+            try:
+                hb = self._is_heart_beat_alive(slaver["conn_slaver"])
+            except:
+                hb = False
+            if not hb:
+                log.warning("heart beat failed: {}".format(slaver["addr_slaver"]))
+                del slaver["conn_slaver"]
+                del slaver
+            else:
+                log.debug("heart beat success: {}".format(slaver["addr_slaver"]))
+                self.slaver_pool.append(slaver)
+
+    @staticmethod
+    def _handshake(conn_slaver):
+        conn_slaver.send(CtrlPkg.pbuild_hs_m2s().raw)
+
+        buff = select_recv(conn_slaver, CtrlPkg.PACKAGE_SIZE, 2)
+        if buff is None:
+            return False
+
+        pkg, verify = CtrlPkg.decode_verify(buff, CtrlPkg.PTYPE_HS_S2M)
+
+        log.debug("HsPkg from {}: {}".format(conn_slaver.getpeername(), pkg))
+
+        return verify
+
     def _get_workable_slaver(self):
+        try_count = 3
         while True:
             try:
                 dict_slaver = self.slaver_pool.popleft()
             except:
                 log.error("!!NO SLAVER AVAILABLE!!")
+                if try_count:
+                    time.sleep(0.1)
+                    try_count -= 1
+                    continue
                 return None
 
             conn_slaver = dict_slaver["conn_slaver"]
@@ -342,6 +455,7 @@ class Master:
                 del conn_slaver
                 del dict_slaver
                 time.sleep(0.05)
+                return None
 
     def _listen_customer(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -367,15 +481,29 @@ class Master:
                 "conn_slaver": conn_slaver,
             }
 
-            t = threading.Thread(target=self._serving_customer,
-                                 name="customer-{}".format(fmt_addr(addr_customer)),
-                                 args=(conn_customer, conn_slaver),
-                                 )
-            self.thread_pool["customer"][addr_customer] = t
-            t.start()
+            try:
+                t = threading.Thread(target=self._serving_customer,
+                                     name="customer-{}".format(fmt_addr(addr_customer)),
+                                     args=(conn_customer, conn_slaver),
+                                     )
+                self.thread_pool["customer"][addr_customer] = t
+                t.start()
+            except:
+                try:
+                    try_close(conn_customer)
+                    del conn_customer
+                    del self.thread_pool["customer"][addr_customer]
+                except:
+                    pass
+                continue
 
 
 class Slaver:
+    """
+    slaver socket阶段
+        连接master->等待->心跳(重复)--->握手-正式传输数据->退出
+    """
+
     def __init__(self, communicate_addr, target_addr, max_spare_count=5):
         self.communicate_addr = communicate_addr
         self.target_addr = target_addr
@@ -411,20 +539,34 @@ class Slaver:
         return sock
 
     def _waiting_handshake(self, conn_slaver):
-        rlist, _, elist = select.select([conn_slaver], [], [conn_slaver], SPARE_SLAVER_TTL)
-        if not rlist or elist:
-            # 超时或出错
-            return False
+        while True:  # 可能会有一段时间的心跳包
 
-        buff = conn_slaver.recv(HandshakePackage.PACKAGE_SIZE)
-        pkg, verify = HandshakePackage.decode_verify(buff, HandshakePackage.TYPE_HANDSHAKE_MASTER_TO_SLAVER)
-        log.debug("HsPkg from {}: {}".format(conn_slaver.getpeername(), pkg))
+            rlist, _, elist = select.select([conn_slaver], [], [conn_slaver], SPARE_SLAVER_TTL)
+            if not rlist or elist:
+                # 超时或出错
+                return False
 
-        if not verify:
-            return False
+            buff = conn_slaver.recv(CtrlPkg.PACKAGE_SIZE)
+            pkg, verify = CtrlPkg.decode_verify(buff)  # type: CtrlPkg,bool
+
+            if not verify:
+                return False
+
+            log.debug("CtrlPkg from {}: {}".format(conn_slaver.getpeername(), pkg))
+
+            if pkg.pkg_type == CtrlPkg.PTYPE_HEART_BEAT:
+                # 心跳包
+                try:
+                    conn_slaver.send(CtrlPkg.pbuild_heart_beat().raw)
+                except:
+                    return False
+
+            elif pkg.pkg_type == CtrlPkg.PTYPE_HS_M2S:
+                # 拿到了开始传输的握手包, 进入工作阶段
+                break
 
         try:
-            conn_slaver.send(HandshakePackage.build_slaver_to_master().content)
+            conn_slaver.send(CtrlPkg.pbuild_hs_s2m().raw)
         except:
             return False
 
@@ -437,7 +579,7 @@ class Slaver:
         try:
             hs = self._waiting_handshake(conn_slaver)
         except:
-            traceback.print_exc()
+            log.debug("slaver waiting handshake failed\n {}".format(traceback.print_exc()))
             hs = False
         if not hs:
             # 握手失败或超时等情况
@@ -461,32 +603,38 @@ class Slaver:
             return
         self.working_pool[addr_slaver]["conn_target"] = conn_target
 
-        SocketBridge(conn_slaver, conn_target).duplex_transfer()
-
-        del self.working_pool[addr_slaver]
+        try:
+            SocketBridge(conn_slaver, conn_target).duplex_transfer()
+        finally:
+            del self.working_pool[addr_slaver]
 
         log.info("complete: {}".format(addr_slaver))
 
     def serve_forever(self):
-        delay = 0
-        MAX_DELAY = 15
+        err_delay = 0
+        spare_delay = 0.1
+        DEFAULT_SPARE_DELAY = 0.1
+        MAX_ERR_DELAY = 15
 
         while True:
             if len(self.spare_slaver_pool) >= self.max_spare_count:
-                time.sleep(0.1)
+                time.sleep(spare_delay)
+                spare_delay = (spare_delay + DEFAULT_SPARE_DELAY) / 2.0
                 continue
+            else:
+                spare_delay = 0.0
 
             try:
                 conn_slaver = self._connect_master()
             except:
                 log.warning("unable to connect master\n {}".format(traceback.format_exc()))
-                time.sleep(delay)
-                if delay < MAX_DELAY:
-                    delay += 1
+                time.sleep(err_delay)
+                if err_delay < MAX_ERR_DELAY:
+                    err_delay += 1
                 continue
             else:
-                if delay:
-                    delay = 0
+                if err_delay:
+                    err_delay = 0
 
             try:
                 threading.Thread(target=self._handling_command,
@@ -500,13 +648,13 @@ class Slaver:
                 ))
             except:
                 log.error("unable create Thread:\n {}".format(traceback.format_exc()))
-                time.sleep(delay)
-                if delay < MAX_DELAY:
-                    delay += 1
+                time.sleep(err_delay)
+                if err_delay < MAX_ERR_DELAY:
+                    err_delay += 1
                 continue
             else:
-                if delay:
-                    delay = 0
+                if err_delay:
+                    err_delay = 0
 
 
 def run_master(communicate_addr, customer_listen_addr):
@@ -531,7 +679,7 @@ def main():
     communicate_addr = ("localhost", 12345)
     customer_listen_addr = ("localhost", 12344)
     # target_addr = ("localhost", 1080)
-    target_addr = ("122.237.8.58", 2223)
+    target_addr = ("93.184.216.34", 80)  # www.example.com
 
     if sys.argv[1] == "-m":
         run_master(communicate_addr, customer_listen_addr)
