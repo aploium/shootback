@@ -209,8 +209,8 @@ class Master:
 
 
 def run_master(communicate_addr, customer_listen_addr):
-    log.info("running as master, slaver from: {} customer_from: {}".format(
-        communicate_addr, customer_listen_addr
+    log.info("{} running as master, slaver from: {} customer_from: {}".format(
+        version_info(), communicate_addr, customer_listen_addr
     ))
 
     Master(customer_listen_addr, communicate_addr).serve_forever()

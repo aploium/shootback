@@ -258,7 +258,7 @@ def main_slaver():
             level = logging.INFO
         configure_logging(level)
 
-    log.info("shootback slaver running")
+    log.info("{} slaver running".format(version_info()))
     log.info("Master: {}".format(fmt_addr(communicate_addr)))
     log.info("Target: {}".format(fmt_addr(target_addr)))
 
