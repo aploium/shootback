@@ -9,7 +9,6 @@ class Master:
         self.thread_pool = {}
         self.thread_pool["spare_slaver"] = {}
         self.thread_pool["working_slaver"] = {}
-        self.thread_pool["customer"] = {}
 
         self.communicate_addr = communicate_addr
 
@@ -43,11 +42,14 @@ class Master:
 
         self.working_pool = working_pool or {}
 
+        self.socket_bridge = SocketBridge()
+
     def serve_forever(self):
         if not self.external_slaver:
             self.thread_pool["listen_slaver"].start()
         self.thread_pool["heart_beat_daemon"].start()
         self.thread_pool["listen_customer"].start()
+        self.thread_pool["socket_bridge"] = self.socket_bridge.start_as_daemon()
 
         while True:
             time.sleep(10)
@@ -58,19 +60,19 @@ class Master:
         self.thread_pool["heart_beat_daemon"].join()
         self.thread_pool["listen_customer"].join()
 
-    def _serving_customer(self, conn_customer, conn_slaver):
-        addr_customer = conn_customer.getpeername()
-
-        try:
-            SocketBridge(conn_customer, conn_slaver).duplex_transfer()
-        except Exception as e:
-            log.warning("SocketBridge failed: {}".format(e))
-            log.debug(traceback.format_exc())
-        finally:
-            del self.thread_pool["customer"][addr_customer]
-            del self.working_pool[addr_customer]
-
+    def _transfer_complete(self, addr_customer):
         log.info("customer complete: {}".format(addr_customer))
+        del self.working_pool[addr_customer]
+
+    def _serve_customer(self, conn_customer, conn_slaver):
+        self.socket_bridge.add_conn_pair(
+            conn_customer, conn_slaver,
+            functools.partial(
+                # 这个回调用来在传输完成后删除工作池中对应记录
+                self._transfer_complete,
+                conn_customer.getpeername()
+            )
+        )
 
     def _listen_slaver(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -142,7 +144,7 @@ class Master:
 
         return verify
 
-    def _get_workable_slaver(self):
+    def _get_an_active_slaver(self):
         try_count = 3
         while True:
             try:
@@ -159,8 +161,9 @@ class Master:
 
             try:
                 hs = self._handshake(conn_slaver)
-            except:
-                log.warning("Handshake failed: {}".format(traceback.format_exc()))
+            except Exception as e:
+                log.warning("Handshake failed: {}".format(e))
+                log.debug(traceback.format_exc())
                 hs = False
 
             if hs:
@@ -170,19 +173,18 @@ class Master:
                 try_close(conn_slaver)
 
                 time.sleep(0.05)
-                return None
 
     def _listen_customer(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.bind(self.customer_listen_addr)
-        sock.listen(10)
+        sock.listen(20)
         while True:
             conn_customer, addr_customer = sock.accept()
             log.info("Serving customer: {} Total customers: {}".format(
                 addr_customer, len(self.working_pool) + 1
             ))
 
-            conn_slaver = self._get_workable_slaver()
+            conn_slaver = self._get_an_active_slaver()
             if conn_slaver is None:
                 log.warning("Closing customer[{}] because no available slaver found".format(
                     addr_customer))
@@ -197,19 +199,10 @@ class Master:
             }
 
             try:
-                t = threading.Thread(target=self._serving_customer,
-                                     name="customer-{}".format(fmt_addr(addr_customer)),
-                                     args=(conn_customer, conn_slaver),
-                                     daemon=True,
-                                     )
-                self.thread_pool["customer"][addr_customer] = t
-                t.start()
+                self._serve_customer(conn_customer, conn_slaver)
             except:
                 try:
                     try_close(conn_customer)
-
-                    del self.thread_pool["customer"][addr_customer]
-
                 except:
                     pass
                 continue

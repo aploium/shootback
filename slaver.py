@@ -18,15 +18,11 @@ class Slaver:
 
         self.spare_slaver_pool = {}
         self.working_pool = {}
+        self.socket_bridge = SocketBridge()
 
     def _connect_master(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect(self.communicate_addr)
-
-        log.info("Connected master[{}] at {}".format(
-            sock.getpeername(),
-            sock.getsockname(),
-        ))
 
         self.spare_slaver_pool[sock.getsockname()] = {
             "conn_slaver": sock,
@@ -77,7 +73,11 @@ class Slaver:
 
         return True
 
-    def _handling_command(self, conn_slaver):
+    def _transfer_complete(self, addr_slaver):
+        del self.working_pool[addr_slaver]
+        log.info("slaver complete: {}".format(addr_slaver))
+
+    def _slaver_working(self, conn_slaver):
         addr_slaver = conn_slaver.getsockname()
         addr_master = conn_slaver.getpeername()
 
@@ -99,6 +99,8 @@ class Slaver:
             log.info("Success master handshake from: {}".format(addr_master))
 
         self.working_pool[addr_slaver] = self.spare_slaver_pool.pop(addr_slaver)
+
+        # 尝试取得目标站的链接
         try:
             conn_target = self._connect_target()
         except:
@@ -109,14 +111,18 @@ class Slaver:
             return
         self.working_pool[addr_slaver]["conn_target"] = conn_target
 
-        try:
-            SocketBridge(conn_slaver, conn_target).duplex_transfer()
-        finally:
-            del self.working_pool[addr_slaver]
-
-        log.info("complete: {}".format(addr_slaver))
+        # 交给SocketBridge, 开始正常数据交换
+        self.socket_bridge.add_conn_pair(
+            conn_slaver, conn_target,
+            functools.partial(
+                # 这个回调用来在传输完成后删除工作池中对应记录
+                self._transfer_complete, addr_slaver
+            )
+        )
 
     def serve_forever(self):
+        self.socket_bridge.start_as_daemon()
+
         err_delay = 0
         spare_delay = 0.1
         DEFAULT_SPARE_DELAY = 0.1
@@ -144,7 +150,7 @@ class Slaver:
                     err_delay = 0
 
             try:
-                t = threading.Thread(target=self._handling_command,
+                t = threading.Thread(target=self._slaver_working,
                                      args=(conn_slaver,)
                                      )
                 t.daemon = True

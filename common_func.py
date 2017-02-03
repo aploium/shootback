@@ -11,6 +11,7 @@ import socket
 import select
 import threading
 import traceback
+import functools
 
 log = logging.getLogger(__name__)
 
@@ -18,11 +19,11 @@ log = logging.getLogger(__name__)
 # working_pool = {}
 # spare_slaver_pool = {}
 
-RECV_BUFFER_SIZE = 2 ** 12  # 4096 bytes
+RECV_BUFFER_SIZE = 2 ** 14  # 16384 bytes
 SECRET_KEY = "shootback"
 SPARE_SLAVER_TTL = 600  # 600s
-INTERNAL_VERSION = 0x0001
-__version__ = (2, 0, 0, INTERNAL_VERSION)
+INTERNAL_VERSION = 0x0002
+__version__ = (2, 1, 0, INTERNAL_VERSION)
 
 
 def version_info():
@@ -69,55 +70,98 @@ def select_recv(conn, size, timeout=None):
 
 
 class SocketBridge:
-    def __init__(self, conn1, conn2):
-        self.conn = [conn1, conn2]
-        self.conn_rd = [conn1, conn2]
-        self.map = {conn1: conn2, conn2: conn1}
+    def __init__(self):
+        self.conn_rd = set()
+        self.map = {}
+        self.callbacks = {}
 
-    def duplex_transfer(self):
-        while self.conn_rd:
-            r, w, e = select.select(self.conn_rd, [], self.conn)
-            if e:
-                break
+    def add_conn_pair(self, conn1, conn2, callback=None):
+        self.conn_rd.update((conn1, conn2))
+        self.map[conn1] = conn2
+        self.map[conn2] = conn1
+        if callback is not None:
+            self.callbacks[conn1] = callback
+
+    def start_as_daemon(self):
+        t = threading.Thread(target=self.start)
+        t.daemon = True
+        t.start()
+        log.info("SocketBridge daemon started")
+        return t
+
+    def start(self):
+        while True:
+            try:
+                self._start()
+            except:
+                log.error("FATAL ERROR! SocketBridge failed {}".format(
+                    traceback.format_exc()
+                ))
+
+    def _start(self):
+        buff = memoryview(bytearray(RECV_BUFFER_SIZE))
+        while True:
+            if not self.conn_rd:
+                time.sleep(0.1)
+                continue
+
+            r, w, e = select.select(self.conn_rd, [], [])
+
             for s in r:
                 try:
-                    buff = s.recv(RECV_BUFFER_SIZE)
+                    rec_len = s.recv_into(buff, RECV_BUFFER_SIZE)
                 except:
-                    self._rd_closed(s)
+                    self._rd_close(s)
                     continue
-                if not buff:
-                    self._rd_closed(s)
+
+                if not rec_len:
+                    self._rd_close(s)
                     continue
                 try:
-                    self.map[s].send(buff)
+                    self.map[s].send(buff[:rec_len])
                 except:
-                    self._wr_closed(s)
+                    log.debug(e)
                     continue
-        self._terminated()
 
-    def _rd_closed(self, conn, once=False):
-        self.conn_rd.remove(conn)
+    def _rd_close(self, conn, once=False):
+        if conn in self.conn_rd:
+            self.conn_rd.remove(conn)
         try:
             conn.shutdown(socket.SHUT_RD)
         except:
             pass
 
         if not once:
-            self._wr_closed(self.map[conn], True)
+            self._wr_close(self.map[conn], True)
 
-    def _wr_closed(self, conn, once=False):
+        if self.map.get(conn) not in self.conn_rd:
+            self._terminate(conn)
+
+    def _wr_close(self, conn, once=False):
         if not once:
-            self._rd_closed(self.map[conn], True)
+            self._rd_close(self.map.get(conn), True)
         try:
             conn.shutdown(socket.SHUT_WR)
         except:
             pass
 
-    def _terminated(self):
-        for s in self.conn:
-            try_close(s)
-        del self.conn[:]  # cannot use .clear, for py27
-        del self.conn_rd[:]
+    def _terminate(self, conn):
+        try_close(conn)
+        if conn in self.map:
+            _mapped_conn = self.map[conn]
+            try_close(_mapped_conn)
+            if _mapped_conn in self.map:
+                del self.map[_mapped_conn]
+        else:
+            _mapped_conn = None
+        del self.map[conn]
+
+        if conn in self.callbacks:
+            self.callbacks[conn]()
+            del self.callbacks[conn]
+        elif _mapped_conn and _mapped_conn in self.callbacks:
+            self.callbacks[_mapped_conn]()
+            del self.callbacks[_mapped_conn]
 
 
 class CtrlPkg:
@@ -176,6 +220,8 @@ class CtrlPkg:
         PTYPE_HEART_BEAT: "40x",
         PTYPE_HS_M2S: "I 36x",
     }
+
+    _PREBUILT_PKG = {}
 
     def __init__(self, pkg_ver=b'\x01', pkg_type=0,
                  prgm_ver=INTERNAL_VERSION, data=(),
@@ -257,24 +303,42 @@ class CtrlPkg:
             return pkg, pkg.verify(pkg_type=pkg_type)
 
     @classmethod
-    def pbuild_hs_m2s(cls):
-        return cls(
-            pkg_type=cls.PTYPE_HS_M2S,
-            data=(cls.SECRET_KEY_CRC32,),
-        )
+    def _prebuilt_pkg(cls, pkg_type, fallback):
+        if pkg_type not in cls._PREBUILT_PKG:
+            pkg = fallback(force_rebuilt=True)
+            cls._PREBUILT_PKG[pkg_type] = pkg
+
+        return cls._PREBUILT_PKG[pkg_type]
 
     @classmethod
-    def pbuild_hs_s2m(cls):
-        return cls(
-            pkg_type=cls.PTYPE_HS_S2M,
-            data=(cls.SECRET_KEY_REVERSED_CRC32,),
-        )
+    def pbuild_hs_m2s(cls, force_rebuilt=False):
+        # because py27 do not have functools.lru_cache, so we must write our own
+        if force_rebuilt:
+            return cls(
+                pkg_type=cls.PTYPE_HS_M2S,
+                data=(cls.SECRET_KEY_CRC32,),
+            )
+        else:
+            return cls._prebuilt_pkg(cls.PTYPE_HS_M2S, cls.pbuild_hs_m2s)
 
     @classmethod
-    def pbuild_heart_beat(cls):
-        return cls(
-            pkg_type=cls.PTYPE_HEART_BEAT,
-        )
+    def pbuild_hs_s2m(cls, force_rebuilt=False):
+        if force_rebuilt:
+            return cls(
+                pkg_type=cls.PTYPE_HS_S2M,
+                data=(cls.SECRET_KEY_REVERSED_CRC32,),
+            )
+        else:
+            return cls._prebuilt_pkg(cls.PTYPE_HS_S2M, cls.pbuild_hs_s2m)
+
+    @classmethod
+    def pbuild_heart_beat(cls, force_rebuilt=False):
+        if force_rebuilt:
+            return cls(
+                pkg_type=cls.PTYPE_HEART_BEAT,
+            )
+        else:
+            return cls._prebuilt_pkg(cls.PTYPE_HEART_BEAT, cls.pbuild_heart_beat)
 
     def __str__(self):
         return """CtrlPkg<pkg_ver: {} pkg_type:{} prgm_ver:{} data:{}>""".format(
