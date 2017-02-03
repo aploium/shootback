@@ -1,81 +1,31 @@
-### Project Special
-config.py
-### Vim template
-# swap
-[._]*.s[a-w][a-z]
-[._]s[a-w][a-z]
-# session
-Session.vim
-# temporary
-.netrwhist
-*~
-# auto-generated tag files
-tags
-### VirtualEnv template
-# Virtualenv
-# http://iamzed.com/2009/05/07/a-primer-on-virtualenv/
-.Python
-[Bb]in
-[Ii]nclude
-[Ll]ib
-[Ll]ib64
-[Ll]ocal
-[Ss]cripts
-pyvenv.cfg
-.venv
-pip-selfcheck.json
-### Eclipse template
+# Created by .ignore support plugin (hsz.mobi)
+### macOS template
+*.DS_Store
+.AppleDouble
+.LSOverride
 
-.metadata
-bin/
-tmp/
-*.tmp
-*.bak
-*.swp
-*~.nib
-local.properties
-.settings/
-.loadpath
-.recommenders
+# Icon must end with two \r
+Icon
 
-# Eclipse Core
-.project
 
-# External tool builders
-.externalToolBuilders/
+# Thumbnails
+._*
 
-# Locally stored "Eclipse launch configurations"
-*.launch
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
 
-# PyDev specific (Python IDE for Eclipse)
-*.pydevproject
-
-# CDT-specific (C/C++ Development Tooling)
-.cproject
-
-# JDT-specific (Eclipse Java Development Tools)
-.classpath
-
-# Java annotation processor (APT)
-.factorypath
-
-# PDT-specific (PHP Development Tools)
-.buildpath
-
-# sbteclipse plugin
-.target
-
-# Tern plugin
-.tern-project
-
-# TeXlipse plugin
-.texlipse
-
-# STS (Spring Tool Suite)
-.springBeans
-
-# Code Recommenders
-.recommenders/
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
 ### Archives template
 # It's better to unpack these files and commit the raw source because
 # git has its own built in compression methods.
@@ -104,6 +54,25 @@ local.properties
 *.msi
 *.msm
 *.msp
+### Ansible template
+*.retry
+### MicrosoftOffice template
+*.tmp
+
+# Word temporary
+~$*.doc*
+
+# Excel temporary
+~$*.xls*
+
+# Excel Backup File
+*.xlk
+
+# PowerPoint temporary
+~$*.ppt*
+
+# Visio autosave temporary files
+*.~vsdx
 ### Windows template
 # Windows image file caches
 Thumbs.db
@@ -119,66 +88,24 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
-### JetBrains template
-# Covers JetBrains IDEs: IntelliJ, RubyMine, PhpStorm, AppCode, PyCharm, CLion, Android Studio and Webstorm
-# Reference: https://intellij-support.jetbrains.com/hc/en-us/articles/206544839
+### NotepadPP template
+# Notepad++ backups #
+*.bak
+### Linux template
+*~
 
-# User-specific stuff:
-.idea/workspace.xml
-.idea/tasks.xml
-.idea/dictionaries
-.idea/vcs.xml
-.idea/jsLibraryMappings.xml
+# temporary files which can be created if a process still has a handle open of a deleted file
+.fuse_hidden*
 
-# Sensitive or high-churn files:
-.idea/dataSources.ids
-.idea/dataSources.xml
-.idea/dataSources.local.xml
-.idea/sqlDataSources.xml
-.idea/dynamic.xml
-.idea/uiDesigner.xml
+# KDE directory preferences
+.directory
 
-# Gradle:
-.idea/gradle.xml
-.idea/libraries
+# Linux trash folder which might appear on any partition or disk
+.Trash-*
 
-# Mongo Explorer plugin:
-.idea/mongoSettings.xml
-
-## File-based project format:
-*.iws
-
-## Plugin-specific files:
-
-# IntelliJ
-/out/
-
-# mpeltonen/sbt-idea plugin
-.idea_modules/
-
-# JIRA plugin
-atlassian-ide-plugin.xml
-
-# Crashlytics plugin (for Android Studio and IntelliJ)
-com_crashlytics_export_strings.xml
-crashlytics.properties
-crashlytics-build.properties
-fabric.properties
-### Example user template template
-### Example user template
-
-# IntelliJ project files
-.idea
-*.iml
-out
-gen### IPythonNotebook template
-# Temporary data
-.ipynb_checkpoints/
-### Example user template template
-### Example user template
-
-# IntelliJ project files
-gen### Python template
+# .nfs files are created when an open file is removed but is still being accessed
+.nfs*
+### Python template
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -188,6 +115,7 @@ __pycache__/
 *.so
 
 # Distribution / packaging
+.Python
 env/
 build/
 develop-eggs/
@@ -232,8 +160,9 @@ coverage.xml
 *.log
 local_settings.py
 
-# Flask instance folder
+# Flask stuff:
 instance/
+.webassets-cache
 
 # Scrapy stuff:
 .scrapy
@@ -244,7 +173,7 @@ docs/_build/
 # PyBuilder
 target/
 
-# IPython Notebook
+# Jupyter Notebook
 .ipynb_checkpoints
 
 # pyenv
@@ -257,6 +186,7 @@ celerybeat-schedule
 .env
 
 # virtualenv
+.venv/
 venv/
 ENV/
 
@@ -265,62 +195,43 @@ ENV/
 
 # Rope project settings
 .ropeproject
-### Example user template template
-### Example user template
+### Vim template
+# swap
+[._]*.s[a-w][a-z]
+[._]s[a-w][a-z]
+# session
+Session.vim
+# temporary
+.netrwhist
+# auto-generated tag files
+tags
+### VisualStudioCode template
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+### JetBrains template
+# Covers JetBrains IDEs: IntelliJ, RubyMine, PhpStorm, AppCode, PyCharm, CLion, Android Studio and Webstorm
+# Reference: https://intellij-support.jetbrains.com/hc/en-us/articles/206544839
+/.idea
 
-# IntelliJ project files
-gen### Example user template template
-### Example user template
+## File-based project format:
+*.iws
 
-# IntelliJ project files
-gen### Emacs template
-# -*- mode: gitignore; -*-
-\#*\#
-/.emacs.desktop
-/.emacs.desktop.lock
-*.elc
-auto-save-list
-tramp
-.\#*
+## Plugin-specific files:
 
-# Org-mode
-.org-id-locations
-*_archive
+# IntelliJ
+/out/
 
-# flymake-mode
-*_flymake.*
+# mpeltonen/sbt-idea plugin
+.idea_modules/
 
-# eshell files
-/eshell/history
-/eshell/lastdir
+# JIRA plugin
+atlassian-ide-plugin.xml
 
-# elpa packages
-/elpa/
-
-# reftex files
-*.rel
-
-# AUCTeX auto folder
-/auto/
-
-# cask packages
-.cask/
-
-# Flycheck
-flycheck_*.el
-
-# server auth directory
-/server/
-
-# projectiles files
-.projectile### Linux template
-
-# temporary files which can be created if a process still has a handle open of a deleted file
-.fuse_hidden*
-
-# KDE directory preferences
-.directory
-
-# Linux trash folder which might appear on any partition or disk
-.Trash-*
-# Created by .ignore support plugin (hsz.mobi)
+# Crashlytics plugin (for Android Studio and IntelliJ)
+com_crashlytics_export_strings.xml
+crashlytics.properties
+crashlytics-build.properties
+fabric.properties

@@ -1,211 +1,282 @@
+#!/usr/bin/env python
 # coding=utf-8
-"""
-shootback: a fast and reliable tunnel implant Gzip and AES
-"""
+from __future__ import print_function, unicode_literals, division, absolute_import
+import sys
+import time
+import binascii
+import struct
+import collections
+import logging
 import socket
-import traceback
-from ColorfulPyPrint import *
-from time import sleep
+import select
 import threading
-import zlib
+import traceback
 
-# The following values are Their DEFAULT value.
-# Please rename the 'config.sample.py' to 'config.py' and modify values in that file.
-# Explains are in that file, too.
-# Master Config
-master_local_listen_addr = ('127.0.0.1', 1080)
-master_remote_listen_addr = ('127.0.0.1', 20822)
-master_connection_pool_size = 80
+log = logging.getLogger(__name__)
 
-# Slaver Config
-master_addr = ('127.0.0.1', 20822)
-slaver_target_addr = ('127.0.0.1', 80)
+# slaver_pool = collections.deque()
+# working_pool = {}
+# spare_slaver_pool = {}
 
-# Common Config
-hello_before_transfer = True
-hello_timeout = 0.8  # a small value
-slaver_unused_connection_pool_size = 20
-
-secret_key_slaver = 'Love'
-secret_key_master = 'Lucia'
-
-compress_during_transfer = True
-compress_level = 7
-
-verbose_level = 2
-
-compress_pkg_header = b'\x05\x05\x05\x05\x05\x05\x05\x05'
-compress_pkg_footer = b'\x07\x07\x07\x07\x07\x07\x07\x07'
-RECV_BUFF_SIZE = 65536
-SLAVER_CONNECTION_TTL = 120
-MSG_BEGIN_TRANSFER = b'+++begin---'
-MSG_CLOSE_SOCKET = b'+++bye---'
-from config import *
-
-if compress_level == 0:
-    compress_during_transfer = False
-compress_pkg_footer_len = len(compress_pkg_footer)
-slaver_verify_string = b'+++' + secret_key_slaver.encode() + b'---'
-master_verify_string = b'+++' + secret_key_master.encode() + b'---'
-socket.setdefaulttimeout(SLAVER_CONNECTION_TTL + 30)
-ColorfulPyPrint_set_verbose_level(verbose_level)
+RECV_BUFFER_SIZE = 2 ** 12  # 4096 bytes
+SECRET_KEY = "shootback"
+SPARE_SLAVER_TTL = 600  # 600s
+INTERNAL_VERSION = 0x0001
+__version__ = (2, 0, 0, INTERNAL_VERSION)
 
 
-def close_socket(sock):
+def version_info():
+    return "{}.{}.{}-r{}".format(*__version__)
+
+
+def configure_logging(level):
+    logging.basicConfig(
+        level=level,
+        format='[%(levelname)s %(asctime)s %(funcName)s] %(message)s',
+    )
+
+
+def fmt_addr(socket):
+    return "{}:{}".format(*socket)
+
+
+def split_host(x):
     try:
-        sock.shutdown(socket.SHUT_RDWR)
-        sock.close()
+        host, port = x.split(":")
+        port = int(port)
+    except:
+        raise ValueError(
+            "wrong syntax, format host:port is "
+            "required, not {}".format(x))
+    else:
+        return host, port
+
+
+def try_close(closable):
+    try:
+        closable.close()
     except:
         pass
 
 
-def try_remove_connection_from_pool(pool, socket):
-    if (pool is not None) and (socket in pool):
-        pool.remove(socket)
-        return True
-    else:
-        return False
+def select_recv(conn, size, timeout=None):
+    rlist, _, elist = select.select([conn], [], [conn], timeout)
+    if not rlist or elist:
+        # 超时或出错
+        return None
+
+    return conn.recv(size)
 
 
-def extract_pkg_from_data(byte_data):
-    complete_pkg = []
+class SocketBridge:
+    def __init__(self, conn1, conn2):
+        self.conn = [conn1, conn2]
+        self.conn_rd = [conn1, conn2]
+        self.map = {conn1: conn2, conn2: conn1}
 
-    z_packages = byte_data.split(compress_pkg_header)
-    len_pkg = len(z_packages)
-    dbgprint('Len_Sep:', len_pkg)
-    if len_pkg < 2:
-        errprint('ReceiveError,CannotFindGzipHeader', byte_data)
-        raise ValueError('ReceiveError,CannotFindGzipHeader')
+    def duplex_transfer(self):
+        while self.conn_rd:
+            r, w, e = select.select(self.conn_rd, [], self.conn)
+            if e:
+                break
+            for s in r:
+                try:
+                    buff = s.recv(RECV_BUFFER_SIZE)
+                except:
+                    self._rd_closed(s)
+                    continue
+                if not buff:
+                    self._rd_closed(s)
+                    continue
+                try:
+                    self.map[s].send(buff)
+                except:
+                    self._wr_closed(s)
+                    continue
+        self._terminated()
 
-    else:
-        data_to_preserve = z_packages.pop()
-        for z_pkg in z_packages:
-            z_pkg = z_pkg[:-compress_pkg_footer_len]  # Remove footer mark
-            if not z_pkg:
-                continue
-            dbgprint('AfterGzip', len(z_pkg), v=4)
-            decompressed_data = zlib.decompress(z_pkg)
-            dbgprint('BeforeGzip', len(decompressed_data), v=4)
-            complete_pkg.append(decompressed_data)
+    def _rd_closed(self, conn, once=False):
+        self.conn_rd.remove(conn)
+        conn.shutdown(socket.SHUT_RD)
 
-        if data_to_preserve[-compress_pkg_footer_len:] == compress_pkg_footer:  # last pkg is complete
-            data_to_preserve = data_to_preserve[:-compress_pkg_footer_len]
-            dbgprint('AfterGzip', len(data_to_preserve), v=4)
-            decompressed_data = zlib.decompress(data_to_preserve)
-            dbgprint('BeforeGzip', len(decompressed_data), v=4)
-            complete_pkg.append(decompressed_data)
-            data_to_preserve = b''
+        if not once:
+            self._wr_closed(self.map[conn], True)
+
+    def _wr_closed(self, conn, once=False):
+        if not once:
+            self._rd_closed(self.map[conn], True)
+        conn.shutdown(socket.SHUT_WR)
+
+    def _terminated(self):
+        for s in self.conn:
+            try_close(s)
+        del self.conn[:]  # cannot use .clear, for py27
+        del self.conn_rd[:]
+    
+
+class CtrlPkg:
+    """
+
+    控制包结构 总长64bytes      CtrlPkg.FORMAT_PKG
+    使用 big-endian
+
+    体积   名称        数据类型           描述
+    1    pkg_ver       char         版本, 目前只能为 0x01
+    1    pkg_type    signed char        包类型 *1
+    2    prgm_ver    unsigned short    程序版本 *2
+    20      N/A       padding          预留
+    40    data        bytes           数据区 *3
+
+    *1: 包类型. 除心跳外, 所有负数包代表由Slaver发出, 正数包由Master发出
+        -1: Slaver-->Master 的握手响应包       PTYPE_HS_S2M
+         0: 心跳包                            PTYPE_HEART_BEAT
+        +1: Master-->Slaver 的握手包          PTYPE_HS_M2S
+
+    *2: 默认即为 INTERNAL_VERSION
+
+    *3: 数据区中的内容由各个类型的包自身定义
+
+    -------------- 数据区定义 ------------------
+    包类型: -1 (Slaver-->Master 的握手响应包)
+        体积   名称           数据类型         描述
+         4    crc32_s2m   unsigned int     简单鉴权用 CRC32(Reversed(SECRET_KEY))
+       其余为空
+       *注意: -1握手包是把 SECRET_KEY 字符串翻转后取CRC32, +1握手包不预先反转
+
+    包类型: 0 (心跳)
+       数据区为空
+
+    包理性: +1 (Master-->Slaver 的握手包)
+        体积   名称           数据类型         描述
+         4    crc32_m2s   unsigned int     简单鉴权用 CRC32(SECRET_KEY)
+       其余为空
+
+    """
+    PACKAGE_SIZE = 2 ** 6  # 64 bytes
+
+    # 密匙的CRC32
+    SECRET_KEY_CRC32 = binascii.crc32(SECRET_KEY.encode('utf-8')) & 0xffffffff
+    SECRET_KEY_REVERSED_CRC32 = binascii.crc32(SECRET_KEY[::-1].encode('utf-8')) & 0xffffffff
+
+    # Package Type
+    PTYPE_HS_S2M = -1  # Handshake Slaver to Master
+    PTYPE_HEART_BEAT = 0  # 心跳
+    PTYPE_HS_M2S = +1  # Handshake Master to Slaver
+
+    # formats
+    FORMAT_PKG = "!c b H 20x 40s"
+    FORMATS_DATA = {
+        PTYPE_HS_S2M: "I 36x",
+        PTYPE_HEART_BEAT: "40x",
+        PTYPE_HS_M2S: "I 36x",
+    }
+
+    def __init__(self, pkg_ver=b'\x01', pkg_type=0,
+                 prgm_ver=INTERNAL_VERSION, data=(),
+                 raw=None,
+                 ):
+        self.pkg_ver = pkg_ver
+        self.pkg_type = pkg_type
+        self.prgm_ver = prgm_ver
+        self.data = data
+        if raw:
+            self.raw = raw
         else:
-            data_to_preserve = compress_pkg_header + data_to_preserve
+            self._build_bytes()
 
-    return complete_pkg, data_to_preserve
+    def _build_bytes(self):
+        self.raw = struct.pack(
+            self.FORMAT_PKG,
+            self.pkg_ver,
+            self.pkg_type,
+            self.prgm_ver,
+            self.data_encode(self.pkg_type, self.data),
+        )
 
+    @classmethod
+    def recalc_crc32(cls):
+        cls.SECRET_KEY_CRC32 = binascii.crc32(SECRET_KEY.encode('utf-8')) & 0xffffffff
+        cls.SECRET_KEY_REVERSED_CRC32 = binascii.crc32(SECRET_KEY[::-1].encode('utf-8')) & 0xffffffff
 
-def simplex_data_transfer(sock_from, sock_to, connect_pool=None, this_socket=None, first_is_compress=False):
-    """
+    @classmethod
+    def data_decode(cls, ptype, data_raw):
+        return struct.unpack(cls.FORMATS_DATA[ptype], data_raw)
 
-    :type this_socket: socket.socket
-    :type sock_to: socket.socket
-    :type sock_from: socket.socket
-    """
-    dbgprint('SimplexTransfer:', sock_from.getpeername(), sock_to.getpeername(), v=4)
-    dbgprint(connect_pool, this_socket, first_is_compress)
-    is_total_size_zero = True
-    is_abort = False
-    wait_count = 60
-    ups_data = b''
-    try:
-        while wait_count:
-            buff = sock_from.recv(RECV_BUFF_SIZE)
-            if compress_during_transfer and first_is_compress:
-                ups_data += buff
-            else:
-                ups_data = buff
+    @classmethod
+    def data_encode(cls, ptype, data):
+        return struct.pack(cls.FORMATS_DATA[ptype], *data)
 
-            try_remove_connection_from_pool(connect_pool, this_socket)
+    def verify(self, pkg_type=None):
+        if pkg_type is not None and self.pkg_type != pkg_type:
+            return False
 
-            if not ups_data:
-                sock_to.sendall(ups_data)
-                wait_count -= 1
-                sleep(0.1)
-                continue
+        elif self.pkg_type == self.PTYPE_HS_S2M:
+            # Slaver-->Master 的握手响应包
+            return self.data[0] == self.SECRET_KEY_REVERSED_CRC32
 
-            if not is_total_size_zero:
-                is_total_size_zero = True
-            if not compress_during_transfer:
-                sock_to.sendall(ups_data)
-            else:
-                if first_is_compress:
-                    pkgs, ups_data = extract_pkg_from_data(ups_data)
-                    for pkg in pkgs:
-                        sock_to.sendall(pkg)
-                else:
-                    dbgprint('BeforeGzip', len(ups_data))
-                    ups_data = zlib.compress(ups_data, compress_level)
-                    dbgprint('AfterGzip', len(ups_data))
-                    sock_to.sendall(compress_pkg_header + ups_data + compress_pkg_footer)
+        elif self.pkg_type == self.PTYPE_HEART_BEAT:
+            # 心跳
+            return True
 
-    except ConnectionResetError:
-        dbgprint('SocksShutdown')
+        elif self.pkg_type == self.PTYPE_HS_M2S:
+            # Master-->Slaver 的握手包
+            return self.data[0] == self.SECRET_KEY_CRC32
+
+        else:
+            return True
+
+    @classmethod
+    def decode_only(cls, raw):
+        if len(raw) != cls.PACKAGE_SIZE:
+            raise ValueError("content size should be {}, but {}".format(
+                cls.PACKAGE_SIZE, len(raw)
+            ))
+        pkg_ver, pkg_type, prgm_ver, data_raw = struct.unpack(cls.FORMAT_PKG, raw)
+        data = cls.data_decode(pkg_type, data_raw)
+
+        return cls(
+            pkg_ver=pkg_ver, pkg_type=pkg_type,
+            prgm_ver=prgm_ver,
+            data=data,
+            raw=raw,
+        )
+
+    @classmethod
+    def decode_verify(cls, raw, pkg_type=None):
         try:
-            sock_to.shutdown(socket.SHUT_WR)
-            sock_from.shutdown(socket.SHUT_RD)
+            pkg = cls.decode_only(raw)
         except:
-            # traceback.print_exc()
-            pass
-    except ConnectionAbortedError:
-        # traceback.print_exc()
-        is_abort = True
-    except socket.timeout:
-        warnprint('SocketTimeout')
-        try_remove_connection_from_pool(connect_pool, this_socket)
-        is_abort = True
-    except OSError:
-        is_abort = True
-    except:
-        traceback.print_exc()
-        is_abort = True
+            return None, False
+        else:
+            return pkg, pkg.verify(pkg_type=pkg_type)
 
-    try_remove_connection_from_pool(connect_pool, this_socket)
-    if is_total_size_zero or is_abort:
-        sleep(0.5)
-        close_socket(sock_to)
-        close_socket(sock_from)
-    dbgprint('ExitSimplex')
-    exit()
-
-
-def duplex_data_transfer(up_sock, dwn_sock, connect_pool=None, this_socket=None, first_is_compress=False):
-    """
-
-    :type up_sock: socket.socket
-    :type dwn_sock: socket.socket
-    """
-    infoprint('Transfer between', up_sock.getpeername(), 'and', dwn_sock.getpeername(), first_is_compress)
-    try:
-        t_ud = threading.Thread(
-            target=simplex_data_transfer, args=(up_sock, dwn_sock),
-            kwargs=dict(
-                connect_pool=connect_pool,
-                this_socket=this_socket,
-                first_is_compress=first_is_compress
-            ),
+    @classmethod
+    def pbuild_hs_m2s(cls):
+        return cls(
+            pkg_type=cls.PTYPE_HS_M2S,
+            data=(cls.SECRET_KEY_CRC32,),
         )
-        t_du = threading.Thread(
-            target=simplex_data_transfer, args=(dwn_sock, up_sock),
-            kwargs=dict(
-                connect_pool=connect_pool,
-                this_socket=this_socket,
-                first_is_compress=not first_is_compress
-            ),
+
+    @classmethod
+    def pbuild_hs_s2m(cls):
+        return cls(
+            pkg_type=cls.PTYPE_HS_S2M,
+            data=(cls.SECRET_KEY_REVERSED_CRC32,),
         )
-        t_ud.start()
-        t_du.start()
-        t_ud.join()
-        t_du.join()
-    except:
-        errprint('ErrInDuplex:')
-        traceback.print_exc()
-    finally:
-        close_socket(up_sock)
-        close_socket(dwn_sock)
+
+    @classmethod
+    def pbuild_heart_beat(cls):
+        return cls(
+            pkg_type=cls.PTYPE_HEART_BEAT,
+        )
+
+    def __str__(self):
+        return """CtrlPkg<pkg_ver: {} pkg_type:{} prgm_ver:{} data:{}>""".format(
+            self.pkg_ver,
+            self.pkg_type,
+            self.prgm_ver,
+            self.data,
+        )
+
+    def __repr__(self):
+        return self.__str__()

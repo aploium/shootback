@@ -1,191 +1,311 @@
+#!/usr/bin/env python3
 # coding=utf-8
-from collections import deque
-import os
-from time import time
 from common_func import *
 
 
-def pop_an_slaver_from_pool(slaver_pool):
-    slaver_wait_retry_count = 10
-    while not len(slaver_pool):
-        if not slaver_wait_retry_count:
-            errprint('ZeroSlaver!! Abort retry.')
-            return None
-        warnprint('ZeroSlaverPoolError, retry: ', slaver_wait_retry_count)
-        slaver_wait_retry_count -= 1
-        sleep(0.5)
-    else:
-        return (slaver_pool.popleft())[0]
+class Master:
+    def __init__(self, customer_listen_addr, communicate_addr=None,
+                 slaver_pool=None, working_pool=None):
+        self.thread_pool = {}
+        self.thread_pool["spare_slaver"] = {}
+        self.thread_pool["working_slaver"] = {}
+        self.thread_pool["customer"] = {}
 
+        self.communicate_addr = communicate_addr
 
-def verify_slaver(slaver_socket):
-    """
-
-    :type slaver_socket: socket.socket
-    """
-    # dbgprint('Verify:', slaver_socket.getpeername())
-    try:
-        slaver_socket.send(master_verify_string)  # identity master myself
-        # dbgprint('VerifySendOK')
-        data = slaver_socket.recv(RECV_BUFF_SIZE)
-        # dbgprint('Recv:', data)
-        if data == slaver_verify_string:  # Good Slaver
-            # dbgprint('VerifyOK', slaver_socket.getpeername())
-            return True
+        if slaver_pool:
+            # 使用外部slaver_pool, 就不再初始化listen
+            self.external_slaver = True
+            self.thread_pool["listen_slaver"] = None
         else:
-            close_socket(slaver_socket)
-            return False
-    except ConnectionResetError:
-        traceback.print_exc()
-        dbgprint('SocksShutdown')
-        close_socket(slaver_socket)
-        return False
-    except:
-        warnprint('UnableToVerifySlaver', slaver_socket.getpeername())
-        traceback.print_exc()
-        close_socket(slaver_socket)
+            # 自己listen来获取slaver
+            self.external_slaver = False
+            self.slaver_pool = collections.deque()
+            self.thread_pool["listen_slaver"] = threading.Thread(
+                target=self._listen_slaver,
+                name="listen_slaver-{}".format(fmt_addr(self.communicate_addr)),
+                daemon=True,
+            )
 
+        self.customer_listen_addr = customer_listen_addr
+        self.thread_pool["listen_customer"] = threading.Thread(
+            target=self._listen_customer,
+            name="listen_customer-{}".format(fmt_addr(self.customer_listen_addr)),
+            daemon=True,
+        )
 
-def send_hello_and_transfer(client_sock, slaver_pool):
-    slaver_sock = pop_an_slaver_from_pool(slaver_pool)
-    while not is_hello_ok(slaver_sock):
-        slaver_sock = pop_an_slaver_from_pool(slaver_pool)
-        if slaver_sock is None:
-            close_socket(client_sock)
-            exit()
-    else:
+        self.thread_pool["heart_beat_daemon"] = threading.Thread(
+            target=self._heart_beat_daemon,
+            name="heart_beat_daemon-{}".format(fmt_addr(self.customer_listen_addr)),
+            daemon=True,
+        )
+        self.thread_pool["heart_beat_daemon"].daemon = True
+
+        self.working_pool = working_pool or {}
+
+    def serve_forever(self):
+        if not self.external_slaver:
+            self.thread_pool["listen_slaver"].start()
+        self.thread_pool["heart_beat_daemon"].start()
+        self.thread_pool["listen_customer"].start()
+
+        while True:
+            time.sleep(10)
+
+    def join(self):
+        if not self.external_slaver:
+            self.thread_pool["listen_slaver"].join()
+        self.thread_pool["heart_beat_daemon"].join()
+        self.thread_pool["listen_customer"].join()
+
+    def _serving_customer(self, conn_customer, conn_slaver):
+        addr_customer = conn_customer.getpeername()
+
         try:
-            duplex_data_transfer(client_sock, slaver_sock)
+            SocketBridge(conn_customer, conn_slaver).duplex_transfer()
+        except Exception as e:
+            log.warning("SocketBridge failed: {}".format(e))
+            log.debug(traceback.format_exc())
         finally:
-            close_socket(client_sock)
-            close_socket(slaver_sock)
-    exit()
+            del self.thread_pool["customer"][addr_customer]
+            del self.working_pool[addr_customer]
 
+        log.info("customer complete: {}".format(addr_customer))
 
-def is_hello_ok(slaver_socket):
-    """
+    def _listen_slaver(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(self.communicate_addr)
+        sock.listen(10)
+        while True:
+            conn, addr = sock.accept()
+            self.slaver_pool.append({
+                "addr_slaver": addr,
+                "conn_slaver": conn,
+            })
+            log.info("Got slaver {} Total: {}".format(
+                addr, len(self.slaver_pool)
+            ))
 
-    :type slaver_socket: socket.socket
-    """
-    # dbgprint('Verify:', slaver_socket.getpeername())
-    try:
-        dbgprint('SendingHelloTo', slaver_socket.getpeername())
-        slaver_socket.settimeout(hello_timeout)
-        slaver_socket.send(MSG_BEGIN_TRANSFER)  # identity master myself
-        # dbgprint('VerifySendOK')
-        data = slaver_socket.recv(RECV_BUFF_SIZE)
-        slaver_socket.settimeout(SLAVER_CONNECTION_TTL)
-        dbgprint('HelloReceived:', data)
-        # dbgprint('Recv:', data)
-        if data == MSG_BEGIN_TRANSFER:  # Good Slaver
-            # dbgprint('VerifyOK', slaver_socket.getpeername())
-            return True
-        else:
-            close_socket(slaver_socket)
+    @staticmethod
+    def _is_heart_beat_alive(conn_slaver):
+        conn_slaver.send(CtrlPkg.pbuild_heart_beat().raw)
+
+        buff = select_recv(conn_slaver, CtrlPkg.PACKAGE_SIZE, 2)
+        if buff is None:
             return False
-    except ConnectionResetError:
-        traceback.print_exc()
-        dbgprint('SocksShutdown')
-        close_socket(slaver_socket)
-        return False
-    except Exception as e:
-        warnprint('HelloSendErr', e)
-        traceback.print_exc()
-        close_socket(slaver_socket)
-        return False
 
+        pkg, verify = CtrlPkg.decode_verify(buff, CtrlPkg.PTYPE_HEART_BEAT)
 
-def local_listen(local_listen_addr, slaver_pool):
-    # try:
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(local_listen_addr)
-    s.listen(master_connection_pool_size)
+        return verify
 
-    infoprint('OutboundListening', local_listen_addr, 'users should connect to this addr')
-    while True:
-        try:
-            client_sock, addr = s.accept()
+    def _heart_beat_daemon(self):
+        default_delay = 5 + SPARE_SLAVER_TTL // 5
+        delay = default_delay
+        log.info("heart beat daemon start, delay: {}s".format(delay))
+        while True:
+            time.sleep(delay)
+            log.debug("heart_beat_daemon: hello! im weak")
 
-            if not hello_before_transfer:
-                slaver_sock = pop_an_slaver_from_pool(slaver_pool)
-                if slaver_sock is None:
-                    close_socket(client_sock)
-                    continue
-                infoprint('SlaverPoolLen:', len(slaver_pool))
-                t = threading.Thread(target=duplex_data_transfer, args=(client_sock, slaver_sock))
-                t.start()
-                # except Exception as e:
-                #     errprint('local_listen', e)
-                #     exit()
+            slaver_count = len(self.slaver_pool)
+            if not slaver_count:
+                log.warning("heart_beat_daemon: sorry, no slaver available, keep sleeping")
+                delay = default_delay
+                continue
+            else:
+                delay = 1 + SPARE_SLAVER_TTL // (slaver_count + 1)
+
+            slaver = self.slaver_pool.popleft()
+
+            try:
+                hb = self._is_heart_beat_alive(slaver["conn_slaver"])
+            except:
+                hb = False
+            if not hb:
+                log.warning("heart beat failed: {}".format(slaver["addr_slaver"]))
+                del slaver["conn_slaver"]
 
             else:
-                t = threading.Thread(target=send_hello_and_transfer, args=(client_sock, slaver_pool))
+                log.debug("heart beat success: {}".format(slaver["addr_slaver"]))
+                self.slaver_pool.append(slaver)
+
+    @staticmethod
+    def _handshake(conn_slaver):
+        conn_slaver.send(CtrlPkg.pbuild_hs_m2s().raw)
+
+        buff = select_recv(conn_slaver, CtrlPkg.PACKAGE_SIZE, 2)
+        if buff is None:
+            return False
+
+        pkg, verify = CtrlPkg.decode_verify(buff, CtrlPkg.PTYPE_HS_S2M)
+
+        log.debug("HsPkg from {}: {}".format(conn_slaver.getpeername(), pkg))
+
+        return verify
+
+    def _get_workable_slaver(self):
+        try_count = 3
+        while True:
+            try:
+                dict_slaver = self.slaver_pool.popleft()
+            except:
+                log.error("!!NO SLAVER AVAILABLE!!  trying {}".format(try_count))
+                if try_count:
+                    time.sleep(0.1)
+                    try_count -= 1
+                    continue
+                return None
+
+            conn_slaver = dict_slaver["conn_slaver"]
+
+            try:
+                hs = self._handshake(conn_slaver)
+            except:
+                log.warning("Handshake failed: {}".format(traceback.format_exc()))
+                hs = False
+
+            if hs:
+                return conn_slaver
+            else:
+                log.warning("slaver handshake failed: {}".format(dict_slaver["addr_slaver"]))
+                try_close(conn_slaver)
+
+                time.sleep(0.05)
+                return None
+
+    def _listen_customer(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(self.customer_listen_addr)
+        sock.listen(10)
+        while True:
+            conn_customer, addr_customer = sock.accept()
+            log.info("Serving customer: {} Total customers: {}".format(
+                addr_customer, len(self.working_pool) + 1
+            ))
+
+            conn_slaver = self._get_workable_slaver()
+            if conn_slaver is None:
+                log.warning("Closing customer[{}] because no available slaver found".format(
+                    addr_customer))
+                try_close(conn_customer)
+
+                continue
+
+            self.working_pool[addr_customer] = {
+                "addr_customer": addr_customer,
+                "conn_customer": conn_customer,
+                "conn_slaver": conn_slaver,
+            }
+
+            try:
+                t = threading.Thread(target=self._serving_customer,
+                                     name="customer-{}".format(fmt_addr(addr_customer)),
+                                     args=(conn_customer, conn_slaver),
+                                     daemon=True,
+                                     )
+                self.thread_pool["customer"][addr_customer] = t
                 t.start()
-        except Exception as e:
-            errprint('OutboundListeningErr', e, 'retry after 1 second')
-            traceback.print_exc()
-            sleep(1)
-
-
-def remote_listen(remote_listen_addr, slaver_pool):
-    """
-
-    :type slaver_pool: deque
-    """
-
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(remote_listen_addr)
-    s.listen(master_connection_pool_size)
-    infoprint('InboundListening', remote_listen_addr, 'slavers should connect to this addr')
-    while True:
-        try:
-            sock, addr = s.accept()
-            if verify_slaver(sock):
-                slaver_pool.append((sock, time()))
-                infoprint('WeGotAnSlaver:', addr, 'Total:', len(slaver_pool))
-                # t = threading.Thread(target=duplex_data_transfer, args=(up_sock, up_addr, dwn_sock))
-                # t.start()
-        except Exception as e:
-            errprint('RemoteListenErr', e, 'retry after 1 second')
-            traceback.print_exc()
-
-
-def ttl_checker(slaver_pool):
-    """
-
-    :type slaver_pool: list
-    """
-    slaver_to_remove = None
-    while True:
-        for slaver in slaver_pool:
-            if slaver[1] + SLAVER_CONNECTION_TTL < time():
-                slaver_to_remove = slaver
+            except:
                 try:
-                    dbgprint('SlaverTimeoutRemove', slaver_to_remove[0].getpeername(), 'Total', len(slaver_pool) - 1)
-                    if hello_before_transfer:
-                        slaver[0].send(MSG_CLOSE_SOCKET)
-                        sleep(0.2)
-                    close_socket(slaver[0])
-                except Exception as e:
-                    dbgprint('SlaverAlreadyClosed', e)
-                break
-        if try_remove_connection_from_pool(slaver_pool, slaver_to_remove):
-            sleep(0.5)
+                    try_close(conn_customer)
+
+                    del self.thread_pool["customer"][addr_customer]
+
+                except:
+                    pass
+                continue
+
+
+def run_master(communicate_addr, customer_listen_addr):
+    log.info("running as master, slaver from: {} customer_from: {}".format(
+        communicate_addr, customer_listen_addr
+    ))
+
+    Master(customer_listen_addr, communicate_addr).serve_forever()
+
+
+def argparse_master():
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="""shootback (master) {ver}
+A fast and reliable reverse TCP tunnel. (this is master)
+Help access local-network service from Internet.
+https://github.com/aploium/shootback""".format(ver=version_info()),
+        epilog="""
+Example1:
+tunnel local ssh to public internet, assume master's ip is 1.2.3.4
+  Master(this pc):                master.py -m 0.0.0.0:10000 -c 0.0.0.0:10022
+  Slaver(another private pc):     slaver.py -m 1.2.3.4:10000 -t 127.0.0.1:22
+  Customer(any internet user):    ssh 1.2.3.4:10022
+  the actual traffic is:  customer <--> master(1.2.3.4 this pc) <--> slaver(private network) <--> ssh(private network)
+
+Example2:
+Tunneling for www.example.com
+  Master(this pc):                master.py -m 127.0.0.1:10000 -c 127.0.0.1:10080
+  Slaver(this pc):                slaver.py -m 127.0.0.1:10000 -t example.com:80
+  Customer(this pc):              curl -v -H "host: example.com" localhost:10080
+
+Tips: ANY service using TCP is shootback-able.  HTTP/FTP/Proxy/SSH/VNC/...
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("-m", "--master", required=True,
+                        metavar="host:port",
+                        help="listening for slavers, usually an Public-Internet-IP. Slaver comes in here  eg: 2.3.3.3:10000")
+    parser.add_argument("-c", "--customer", required=True,
+                        metavar="host:port",
+                        help="listening for customers, 3rd party program connects here  eg: 10.1.2.3:10022")
+    parser.add_argument("-k", "--secretkey", default="shootback",
+                        help="secretkey to identity master and slaver, should be set to the same value in both side")
+    parser.add_argument("-v", "--verbose", action="count", default=0,
+                        help="verbose output")
+    parser.add_argument("-q", "--quiet", action="count", default=0,
+                        help="quiet output, only display warning and errors, use two to disable output")
+    parser.add_argument("-V", "--version", action="version", version="shootback {}-master".format(version_info()))
+    parser.add_argument("--ttl", default=600, type=int, dest="SPARE_SLAVER_TTL",
+                        help="standing-by slaver's TTL, default is 600. "
+                             "In master side, this value affects heart-beat frequency. "
+                             "Default value is optimized for most cases")
+
+    return parser.parse_args()
+
+
+def main_master():
+    global SPARE_SLAVER_TTL
+    global SECRET_KEY
+
+    args = argparse_master()
+
+    if args.verbose and args.quiet:
+        print("-v and -q should not appear together")
+        exit(1)
+
+    communicate_addr = split_host(args.master)
+    customer_listen_addr = split_host(args.customer)
+
+    SECRET_KEY = args.secretkey
+    CtrlPkg.recalc_crc32()
+
+    SPARE_SLAVER_TTL = args.SPARE_SLAVER_TTL
+    if args.quiet < 2:
+        if args.verbose:
+            level = logging.DEBUG
+        elif args.quiet:
+            level = logging.WARNING
         else:
-            sleep(3)
+            level = logging.INFO
+        configure_logging(level)
 
+    log.info("shootback master running")
+    log.info("Listening for slavers: {}".format(fmt_addr(communicate_addr)))
+    log.info("Listening for customers: {}".format(fmt_addr(customer_listen_addr)))
 
-def main():
-    slaver_pool = deque()
-    r = threading.Thread(target=remote_listen, args=(master_remote_listen_addr, slaver_pool))
-    l = threading.Thread(target=local_listen, args=(master_local_listen_addr, slaver_pool))
-    slaver_ttl_checker = threading.Thread(target=ttl_checker, args=(slaver_pool,), daemon=True)
-    r.start()
-    l.start()
-    slaver_ttl_checker.start()
+    # communicate_addr = ("localhost", 10000)
+    # customer_listen_addr = ("localhost", 10080)
+    # target_addr = ("localhost", 1080)
+    # target_addr = ("93.184.216.34", 80)  # www.example.com
+
+    run_master(communicate_addr, customer_listen_addr)
 
 
 if __name__ == '__main__':
-    main()
-    while True:
-        sleep(10)
+    main_master()
