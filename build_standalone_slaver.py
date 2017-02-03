@@ -20,8 +20,13 @@ def build_standalone_slaver(outfile_name="slaver_standalone.py"):
         os.path.join(base_path, outfile_name, )
     )
     with open("slaver.py", "r", encoding='utf-8') as fr:
-        with open(outfile_name, "a", encoding="utf-8") as fw:
-            fw.write(fr.read())
+        slaver = fr.read()
+
+    slaver = slaver.replace("from __future__ import", "# from __future__ import", 1)
+    slaver = slaver.replace("from common_func import", "# from common_func import", 1)
+
+    with open(outfile_name, "a", encoding="utf-8") as fw:
+        fw.write(slaver)
 
     print("generate complete!\noutput file:", output_fullpath)
 
