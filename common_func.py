@@ -97,7 +97,10 @@ class SocketBridge:
 
     def _rd_closed(self, conn, once=False):
         self.conn_rd.remove(conn)
-        conn.shutdown(socket.SHUT_RD)
+        try:
+            conn.shutdown(socket.SHUT_RD)
+        except:
+            pass
 
         if not once:
             self._wr_closed(self.map[conn], True)
@@ -105,14 +108,17 @@ class SocketBridge:
     def _wr_closed(self, conn, once=False):
         if not once:
             self._rd_closed(self.map[conn], True)
-        conn.shutdown(socket.SHUT_WR)
+        try:
+            conn.shutdown(socket.SHUT_WR)
+        except:
+            pass
 
     def _terminated(self):
         for s in self.conn:
             try_close(s)
         del self.conn[:]  # cannot use .clear, for py27
         del self.conn_rd[:]
-    
+
 
 class CtrlPkg:
     """
