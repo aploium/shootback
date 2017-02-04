@@ -89,7 +89,7 @@ class Master:
             ))
 
     @staticmethod
-    def _is_heart_beat_alive(conn_slaver):
+    def _send_heartbeat(conn_slaver):
         conn_slaver.send(CtrlPkg.pbuild_heart_beat().raw)
 
         buff = select_recv(conn_slaver, CtrlPkg.PACKAGE_SIZE, 2)
@@ -119,7 +119,7 @@ class Master:
             slaver = self.slaver_pool.popleft()
 
             try:
-                hb = self._is_heart_beat_alive(slaver["conn_slaver"])
+                hb = self._send_heartbeat(slaver["conn_slaver"])
             except:
                 hb = False
             if not hb:
