@@ -6,6 +6,11 @@ from common_func import *
 class Master:
     def __init__(self, customer_listen_addr, communicate_addr=None,
                  slaver_pool=None, working_pool=None):
+        """
+
+        :param customer_listen_addr: equals to the -c/--customer param
+        :param communicate_addr: equals to the -m/--master param
+        """
         self.thread_pool = {}
         self.thread_pool["spare_slaver"] = {}
         self.thread_pool["working_slaver"] = {}
@@ -13,19 +18,22 @@ class Master:
         self.communicate_addr = communicate_addr
 
         if slaver_pool:
-            # 使用外部slaver_pool, 就不再初始化listen
+            # 若使用外部slaver_pool, 就不再初始化listen
+            # 这是以后待添加的功能
             self.external_slaver = True
             self.thread_pool["listen_slaver"] = None
         else:
             # 自己listen来获取slaver
             self.external_slaver = False
             self.slaver_pool = collections.deque()
+            # prepare Thread obj, not activated yet
             self.thread_pool["listen_slaver"] = threading.Thread(
                 target=self._listen_slaver,
                 name="listen_slaver-{}".format(fmt_addr(self.communicate_addr)),
                 daemon=True,
             )
 
+        # prepare Thread obj, not activated yet
         self.customer_listen_addr = customer_listen_addr
         self.thread_pool["listen_customer"] = threading.Thread(
             target=self._listen_customer,
@@ -33,12 +41,12 @@ class Master:
             daemon=True,
         )
 
+        # prepare Thread obj, not activated yet
         self.thread_pool["heart_beat_daemon"] = threading.Thread(
             target=self._heart_beat_daemon,
             name="heart_beat_daemon-{}".format(fmt_addr(self.customer_listen_addr)),
             daemon=True,
         )
-        self.thread_pool["heart_beat_daemon"].daemon = True
 
         self.working_pool = working_pool or {}
 
@@ -61,38 +69,27 @@ class Master:
         self.thread_pool["listen_customer"].join()
 
     def _transfer_complete(self, addr_customer):
+        """a callback for SocketBridge, do some cleanup jobs"""
         log.info("customer complete: {}".format(addr_customer))
         del self.working_pool[addr_customer]
 
     def _serve_customer(self, conn_customer, conn_slaver):
+        """put customer and slaver sockets into SocketBridge, let them exchange data"""
         self.socket_bridge.add_conn_pair(
             conn_customer, conn_slaver,
-            functools.partial(
+            functools.partial(  # it's a callback
                 # 这个回调用来在传输完成后删除工作池中对应记录
                 self._transfer_complete,
                 conn_customer.getpeername()
             )
         )
 
-    def _listen_slaver(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(self.communicate_addr)
-        sock.listen(10)
-        while True:
-            conn, addr = sock.accept()
-            self.slaver_pool.append({
-                "addr_slaver": addr,
-                "conn_slaver": conn,
-            })
-            log.info("Got slaver {} Total: {}".format(
-                addr, len(self.slaver_pool)
-            ))
-
     @staticmethod
     def _send_heartbeat(conn_slaver):
+        """send and verify heartbeat pkg"""
         conn_slaver.send(CtrlPkg.pbuild_heart_beat().raw)
 
-        buff = select_recv(conn_slaver, CtrlPkg.PACKAGE_SIZE, 2)
+        buff = select_recv(conn_slaver, CtrlPkg.PACKAGE_SIZE, 3)
         if buff is None:
             return False
 
@@ -101,6 +98,14 @@ class Master:
         return verify
 
     def _heart_beat_daemon(self):
+        """
+
+        每次取出slaver队列头部的一个, 测试心跳, 并把它放回尾部.
+            slaver若超过 SPARE_SLAVER_TTL 秒未收到心跳, 则会自动重连
+            所以睡眠间隔(delay)满足   delay * slaver总数  < TTL
+            使得一轮循环的时间小于TTL,
+            保证每个slaver都在过期前能被心跳保活
+        """
         default_delay = 5 + SPARE_SLAVER_TTL // 5
         delay = default_delay
         log.info("heart beat daemon start, delay: {}s".format(delay))
@@ -111,18 +116,26 @@ class Master:
             slaver_count = len(self.slaver_pool)
             if not slaver_count:
                 log.warning("heart_beat_daemon: sorry, no slaver available, keep sleeping")
+                # restore default delay if there is no slaver
                 delay = default_delay
                 continue
             else:
+                # notice this `(slaver_count + 1)`
+                # slaver will expire and re-connect if didn't receive
+                #   heartbeat pkg after SPARE_SLAVER_TTL seconds.
+                # set delay to be short enough to let every slaver receive heartbeat
+                #   before expire
                 delay = 1 + SPARE_SLAVER_TTL // (slaver_count + 1)
 
+            # pop the oldest slaver
+            #   heartbeat it and then put it to the end of queue
             slaver = self.slaver_pool.popleft()
 
             try:
-                hb = self._send_heartbeat(slaver["conn_slaver"])
+                hb_result = self._send_heartbeat(slaver["conn_slaver"])
             except:
-                hb = False
-            if not hb:
+                hb_result = False
+            if not hb_result:
                 log.warning("heart beat failed: {}".format(slaver["addr_slaver"]))
                 del slaver["conn_slaver"]
 
@@ -132,6 +145,21 @@ class Master:
 
     @staticmethod
     def _handshake(conn_slaver):
+        """
+        handshake before real data transfer
+        it ensures:
+            1. client is alive and ready for transmission
+            2. client is shootback_slaver, not mistakenly connected other program
+            3. verify the SECRET_KEY
+
+        handshake procedure:
+            1. master hello --> slaver
+            2. slaver verify master's hello
+            3. slaver hello --> master
+            4. (immediately after 3) slaver connect to target
+            4. master verify slaver
+            5. enter real data transfer
+        """
         conn_slaver.send(CtrlPkg.pbuild_hs_m2s().raw)
 
         buff = select_recv(conn_slaver, CtrlPkg.PACKAGE_SIZE, 2)
@@ -140,11 +168,12 @@ class Master:
 
         pkg, verify = CtrlPkg.decode_verify(buff, CtrlPkg.PTYPE_HS_S2M)
 
-        log.debug("HsPkg from {}: {}".format(conn_slaver.getpeername(), pkg))
+        log.debug("CtrlPkg from slaver {}: {}".format(conn_slaver.getpeername(), pkg))
 
         return verify
 
     def _get_an_active_slaver(self):
+        """get and activate an slaver for data transfer"""
         try_count = 3
         while True:
             try:
@@ -173,6 +202,20 @@ class Master:
                 try_close(conn_slaver)
 
                 time.sleep(0.05)
+
+    def _listen_slaver(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(self.communicate_addr)
+        sock.listen(10)
+        while True:
+            conn, addr = sock.accept()
+            self.slaver_pool.append({
+                "addr_slaver": addr,
+                "conn_slaver": conn,
+            })
+            log.info("Got slaver {} Total: {}".format(
+                addr, len(self.slaver_pool)
+            ))
 
     def _listen_customer(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
