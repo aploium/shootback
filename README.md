@@ -45,7 +45,27 @@ Consumes less than 1% CPU and 8MB memory under 800 concurrency.
     ```
 
 5. for more help, please see `python3 master.py --help` and `python3 slaver.py --help`
-   
+
+
+## Tips
+
+1. run in daemon:  
+    `nohup python(or python3) slaver.py -m host:port -t host:port -q &`  
+    or:
+    ```bash
+    # screen is a linux command
+    screen
+    python(or python3) slaver.py -m host:port -t host:port
+    # press  ctrl-a d  to detach screen
+    # and if necessary, use "screen -r" to reattach
+    ```
+
+2. ANY service using TCP is shootback-able.  HTTP/FTP/Proxy/SSH/VNC/...
+
+3. shootback itself just do the transmission job, do not handle encrypt or proxy.  
+    however you can use a 3rd party proxy (eg: shadowsocks) as slaver target.  
+    for example:  
+    `shadowsocks_server<-->shootback_slaver<-->shootback_master<-->shadowsocks_client(socks5)`
 
 ## Warning
 
