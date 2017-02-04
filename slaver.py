@@ -8,7 +8,7 @@ from common_func import *
 class Slaver:
     """
     slaver socket阶段
-        连接master->等待->心跳(重复)--->握手-正式传输数据->退出
+        连接master->等待->心跳(重复)--->握手-->正式传输数据->退出
     """
 
     def __init__(self, communicate_addr, target_addr, max_spare_count=5):
@@ -41,9 +41,31 @@ class Slaver:
 
         return sock
 
-    def _waiting_handshake(self, conn_slaver):
+    def _waiting_handshake_or_ctrlpkg(self, conn_slaver):
+        """
+        waiting handshake or CtrlPkg before real data transfer
+
+        well, there is only one CtrlPkg: heartbeat, yet
+
+        it ensures:
+            1. network is ok, master is alive
+            2. master is shootback_master, not bad guy
+            3. verify the SECRET_KEY
+            4. tell slaver it's time to connect target
+
+        handshake procedure:
+            1. master hello --> slaver
+            2. slaver verify master's hello
+            3. slaver hello --> master
+            4. (immediately after 3) slaver connect to target
+            4. master verify slaver
+            5. enter real data transfer
+        """
         while True:  # 可能会有一段时间的心跳包
 
+            # recv timeout is set to `SPARE_SLAVER_TTL`
+            # which means if not receive pkg from master in SPARE_SLAVER_TTL seconds,
+            #   this connection would expire and re-connect
             buff = select_recv(conn_slaver, CtrlPkg.PACKAGE_SIZE, SPARE_SLAVER_TTL)
 
             pkg, verify = CtrlPkg.decode_verify(buff)  # type: CtrlPkg,bool
@@ -54,7 +76,7 @@ class Slaver:
             log.debug("CtrlPkg from {}: {}".format(conn_slaver.getpeername(), pkg))
 
             if pkg.pkg_type == CtrlPkg.PTYPE_HEART_BEAT:
-                # 心跳包
+                # if the pkg is heartbeat pkg, do nothing but reset timeout procedure
 
                 try:
                     conn_slaver.send(CtrlPkg.pbuild_heart_beat().raw)
@@ -67,6 +89,7 @@ class Slaver:
                 break
 
         try:
+            # send slaver hello --> master
             conn_slaver.send(CtrlPkg.pbuild_hs_s2m().raw)
         except:
             return False
@@ -74,6 +97,7 @@ class Slaver:
         return True
 
     def _transfer_complete(self, addr_slaver):
+        """a callback for SocketBridge, do some cleanup jobs"""
         del self.working_pool[addr_slaver]
         log.info("slaver complete: {}".format(addr_slaver))
 
@@ -81,8 +105,9 @@ class Slaver:
         addr_slaver = conn_slaver.getsockname()
         addr_master = conn_slaver.getpeername()
 
+        # --------- handshaking and handling CtrlPkg -------------
         try:
-            hs = self._waiting_handshake(conn_slaver)
+            hs = self._waiting_handshake_or_ctrlpkg(conn_slaver)
         except Exception as e:
             log.warning("slaver waiting handshake failed {}".format(e))
             log.debug(traceback.print_exc())
@@ -98,9 +123,11 @@ class Slaver:
         else:
             log.info("Success master handshake from: {}".format(addr_master))
 
+        # ----------- slaver activated! ------------
+        # move self from spare_slaver_pool to working_pool
         self.working_pool[addr_slaver] = self.spare_slaver_pool.pop(addr_slaver)
 
-        # 尝试取得目标站的链接
+        # ----------- connecting to target ----------
         try:
             conn_target = self._connect_target()
         except:
@@ -111,7 +138,9 @@ class Slaver:
             return
         self.working_pool[addr_slaver]["conn_target"] = conn_target
 
-        # 交给SocketBridge, 开始正常数据交换
+        # ----------- all preparation finished -----------
+        # pass two sockets to SocketBridge, and let it do the
+        #   real data exchange task
         self.socket_bridge.add_conn_pair(
             conn_slaver, conn_target,
             functools.partial(
@@ -120,18 +149,28 @@ class Slaver:
             )
         )
 
-    def serve_forever(self):
-        self.socket_bridge.start_as_daemon()
+        # this slaver thread exits here
+        return
 
+    def serve_forever(self):
+        self.socket_bridge.start_as_daemon()  # hi, don't ignore me
+
+        # sleep between two retries if exception occurs
+        #   eg: master down or network temporary failed
+        # err_delay would increase if err occurs repeatedly
+        #   until `max_err_delay`
+        # would immediately decrease to 0 after a success connection
         err_delay = 0
-        spare_delay = 0.1
-        DEFAULT_SPARE_DELAY = 0.1
-        MAX_ERR_DELAY = 15
+        max_err_delay = 15
+        # spare_delay is sleep cycle if we are full of spare slaver
+        #   would immediately decrease to 0 after a slaver lack
+        spare_delay = 0.08
+        default_spare_delay = 0.08
 
         while True:
             if len(self.spare_slaver_pool) >= self.max_spare_count:
                 time.sleep(spare_delay)
-                spare_delay = (spare_delay + DEFAULT_SPARE_DELAY) / 2.0
+                spare_delay = (spare_delay + default_spare_delay) / 2.0
                 continue
             else:
                 spare_delay = 0.0
@@ -142,12 +181,9 @@ class Slaver:
                 log.warning("unable to connect master {}".format(e))
                 log.debug(traceback.format_exc())
                 time.sleep(err_delay)
-                if err_delay < MAX_ERR_DELAY:
+                if err_delay < max_err_delay:
                     err_delay += 1
                 continue
-            else:
-                if err_delay:
-                    err_delay = 0
 
             try:
                 t = threading.Thread(target=self._slaver_working,
@@ -166,12 +202,12 @@ class Slaver:
                 log.debug(traceback.format_exc())
                 time.sleep(err_delay)
 
-                if err_delay < MAX_ERR_DELAY:
+                if err_delay < max_err_delay:
                     err_delay += 1
                 continue
-            else:
-                if err_delay:
-                    err_delay = 0
+
+            # set err_delay if everything is ok
+            err_delay = 0
 
 
 def run_slaver(communicate_addr, target_addr, max_spare_count=5):

@@ -151,6 +151,7 @@ class Master:
             1. client is alive and ready for transmission
             2. client is shootback_slaver, not mistakenly connected other program
             3. verify the SECRET_KEY
+            4. tell slaver it's time to connect target
 
         handshake procedure:
             1. master hello --> slaver
@@ -166,7 +167,7 @@ class Master:
         if buff is None:
             return False
 
-        pkg, verify = CtrlPkg.decode_verify(buff, CtrlPkg.PTYPE_HS_S2M)
+        pkg, verify = CtrlPkg.decode_verify(buff, CtrlPkg.PTYPE_HS_S2M)  # type: CtrlPkg,bool
 
         log.debug("CtrlPkg from slaver {}: {}".format(conn_slaver.getpeername(), pkg))
 
