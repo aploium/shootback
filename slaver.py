@@ -201,7 +201,7 @@ Example2:
 Tunneling for www.example.com
   Master(this pc):                master.py -m 127.0.0.1:10000 -c 127.0.0.1:10080
   Slaver(this pc):                slaver.py -m 127.0.0.1:10000 -t example.com:80
-  Customer(this pc):              curl -v -H "host: example.com" localhost:10080
+  Customer(this pc):              curl -v -H "host: example.com" 127.0.0.1:10080
 
 Tips: ANY service using TCP is shootback-able.  HTTP/FTP/Proxy/SSH/VNC/...
 """,
