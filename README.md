@@ -28,7 +28,8 @@ Consumes less than 1% CPU and 8MB memory under 800 concurrency.
     * no external dependencies, only python std lib
 2. download `git clone https://github.com/aploium/shootback`
 3. (optional) if you need a single-file slaver.py, run `python3 build_standalone_slaver.py`
-4. ```bash
+4. run these command
+    ```bash
     # master listen :10000 for slaver, :10080 for you
     python3 master.py -m 127.0.0.1:10000 -c 127.0.0.1:10080
     
@@ -42,6 +43,7 @@ Consumes less than 1% CPU and 8MB memory under 800 concurrency.
     # -- some HTML content from example.com --
     # -- some HTML content from example.com --
     ```
+
 5. for more help, please see `python3 master.py --help` and `python3 slaver.py --help`
    
 
