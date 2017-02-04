@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # coding=utf-8
 from common_func import *
+import queue
 
 
 class Master:
@@ -15,7 +16,17 @@ class Master:
         self.thread_pool["spare_slaver"] = {}
         self.thread_pool["working_slaver"] = {}
 
+        self.working_pool = working_pool or {}
+
+        self.socket_bridge = SocketBridge()
+
+        # a queue for customers who have connected to us,
+        #   but not assigned a slaver yet
+        self.pending_customers = queue.Queue()
+
         self.communicate_addr = communicate_addr
+
+        _fmt_communicate_addr = fmt_addr(self.communicate_addr)
 
         if slaver_pool:
             # 若使用外部slaver_pool, 就不再初始化listen
@@ -29,7 +40,7 @@ class Master:
             # prepare Thread obj, not activated yet
             self.thread_pool["listen_slaver"] = threading.Thread(
                 target=self._listen_slaver,
-                name="listen_slaver-{}".format(fmt_addr(self.communicate_addr)),
+                name="listen_slaver-{}".format(_fmt_communicate_addr),
                 daemon=True,
             )
 
@@ -37,36 +48,40 @@ class Master:
         self.customer_listen_addr = customer_listen_addr
         self.thread_pool["listen_customer"] = threading.Thread(
             target=self._listen_customer,
-            name="listen_customer-{}".format(fmt_addr(self.customer_listen_addr)),
+            name="listen_customer-{}".format(_fmt_communicate_addr),
             daemon=True,
         )
 
         # prepare Thread obj, not activated yet
         self.thread_pool["heart_beat_daemon"] = threading.Thread(
             target=self._heart_beat_daemon,
-            name="heart_beat_daemon-{}".format(fmt_addr(self.customer_listen_addr)),
+            name="heart_beat_daemon-{}".format(_fmt_communicate_addr),
             daemon=True,
         )
 
-        self.working_pool = working_pool or {}
-
-        self.socket_bridge = SocketBridge()
+        # prepare assign_slaver_daemon
+        self.thread_pool["assign_slaver_daemon1"] = threading.Thread(
+            target=self._assign_slaver_daemon,
+            name="assign_slaver_daemon1-{}".format(_fmt_communicate_addr),
+            daemon=True,
+        )
+        self.thread_pool["assign_slaver_daemon2"] = threading.Thread(
+            target=self._assign_slaver_daemon,
+            name="assign_slaver_daemon2-{}".format(_fmt_communicate_addr),
+            daemon=True,
+        )
 
     def serve_forever(self):
         if not self.external_slaver:
             self.thread_pool["listen_slaver"].start()
         self.thread_pool["heart_beat_daemon"].start()
         self.thread_pool["listen_customer"].start()
+        self.thread_pool["assign_slaver_daemon1"].start()
+        self.thread_pool["assign_slaver_daemon2"].start()
         self.thread_pool["socket_bridge"] = self.socket_bridge.start_as_daemon()
 
         while True:
             time.sleep(10)
-
-    def join(self):
-        if not self.external_slaver:
-            self.thread_pool["listen_slaver"].join()
-        self.thread_pool["heart_beat_daemon"].join()
-        self.thread_pool["listen_customer"].join()
 
     def _transfer_complete(self, addr_customer):
         """a callback for SocketBridge, do some cleanup jobs"""
@@ -175,15 +190,16 @@ class Master:
 
     def _get_an_active_slaver(self):
         """get and activate an slaver for data transfer"""
-        try_count = 3
+        try_count = 100
         while True:
             try:
                 dict_slaver = self.slaver_pool.popleft()
             except:
-                log.error("!!NO SLAVER AVAILABLE!!  trying {}".format(try_count))
                 if try_count:
-                    time.sleep(0.1)
+                    time.sleep(0.02)
                     try_count -= 1
+                    if try_count % 10 == 0:
+                        log.error("!!NO SLAVER AVAILABLE!!  trying {}".format(try_count))
                     continue
                 return None
 
@@ -202,31 +218,13 @@ class Master:
                 log.warning("slaver handshake failed: {}".format(dict_slaver["addr_slaver"]))
                 try_close(conn_slaver)
 
-                time.sleep(0.05)
+                time.sleep(0.02)
 
-    def _listen_slaver(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(self.communicate_addr)
-        sock.listen(10)
+    def _assign_slaver_daemon(self):
+        """assign slaver for customer"""
         while True:
-            conn, addr = sock.accept()
-            self.slaver_pool.append({
-                "addr_slaver": addr,
-                "conn_slaver": conn,
-            })
-            log.info("Got slaver {} Total: {}".format(
-                addr, len(self.slaver_pool)
-            ))
-
-    def _listen_customer(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(self.customer_listen_addr)
-        sock.listen(20)
-        while True:
-            conn_customer, addr_customer = sock.accept()
-            log.info("Serving customer: {} Total customers: {}".format(
-                addr_customer, len(self.working_pool) + 1
-            ))
+            # get a newly connected customer
+            conn_customer, addr_customer = self.pending_customers.get()
 
             conn_slaver = self._get_an_active_slaver()
             if conn_slaver is None:
@@ -250,6 +248,35 @@ class Master:
                 except:
                     pass
                 continue
+
+    def _listen_slaver(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(self.communicate_addr)
+        sock.listen(10)
+        while True:
+            conn, addr = sock.accept()
+            self.slaver_pool.append({
+                "addr_slaver": addr,
+                "conn_slaver": conn,
+            })
+            log.info("Got slaver {} Total: {}".format(
+                addr, len(self.slaver_pool)
+            ))
+
+    def _listen_customer(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(self.customer_listen_addr)
+        sock.listen(20)
+        while True:
+            conn_customer, addr_customer = sock.accept()
+            log.info("Serving customer: {} Total customers: {}".format(
+                addr_customer, self.pending_customers.qsize() + 1
+            ))
+
+            # just put it into the queue,
+            #   let _assign_slaver_daemon() do the else
+            #   don't block this loop
+            self.pending_customers.put((conn_customer, addr_customer))
 
 
 def run_master(communicate_addr, customer_listen_addr):
