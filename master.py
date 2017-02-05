@@ -227,6 +227,8 @@ class Master:
                 try_close(conn_customer)
 
                 continue
+            else:
+                log.debug("Using slaver: {} for {}".format(conn_slaver.getpeername(), addr_customer))
 
             self.working_pool[addr_customer] = {
                 "addr_customer": addr_customer,

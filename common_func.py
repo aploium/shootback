@@ -31,8 +31,8 @@ SECRET_KEY = "shootback"
 # notice: working slaver would NEVER timeout
 SPARE_SLAVER_TTL = 600
 # internal program version, appears in CtrlPkg
-INTERNAL_VERSION = 0x0006
-__version__ = (2, 2, 1, INTERNAL_VERSION)
+INTERNAL_VERSION = 0x0007
+__version__ = (2, 2, 2, INTERNAL_VERSION)
 
 # just a logger
 log = logging.getLogger(__name__)
@@ -223,7 +223,6 @@ class SocketBridge:
             # if a socket is wr_shutdowned, then it's
             self._rd_shutdown(self.map[conn], True)
 
-
     def _terminate(self, conn):
         """terminate a sockets pair (two socket)
         :type conn: socket.SocketType
@@ -396,23 +395,25 @@ class CtrlPkg:
         return struct.pack(cls.FORMATS_DATA[ptype], *data)
 
     def verify(self, pkg_type=None):
-        if pkg_type is not None and self.pkg_type != pkg_type:
+        try:
+            if pkg_type is not None and self.pkg_type != pkg_type:
+                return False
+            elif self.pkg_type == self.PTYPE_HS_S2M:
+                # Slaver-->Master 的握手响应包
+                return self.data[0] == self.SECRET_KEY_REVERSED_CRC32
+
+            elif self.pkg_type == self.PTYPE_HEART_BEAT:
+                # 心跳
+                return True
+
+            elif self.pkg_type == self.PTYPE_HS_M2S:
+                # Master-->Slaver 的握手包
+                return self.data[0] == self.SECRET_KEY_CRC32
+
+            else:
+                return True
+        except:
             return False
-
-        elif self.pkg_type == self.PTYPE_HS_S2M:
-            # Slaver-->Master 的握手响应包
-            return self.data[0] == self.SECRET_KEY_REVERSED_CRC32
-
-        elif self.pkg_type == self.PTYPE_HEART_BEAT:
-            # 心跳
-            return True
-
-        elif self.pkg_type == self.PTYPE_HS_M2S:
-            # Master-->Slaver 的握手包
-            return self.data[0] == self.SECRET_KEY_CRC32
-
-        else:
-            return True
 
     @classmethod
     def decode_only(cls, raw):
