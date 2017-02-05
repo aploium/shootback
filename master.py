@@ -2,6 +2,17 @@
 # coding=utf-8
 from common_func import *
 import queue
+import atexit
+
+_listening_sockets = []  # for close at exit
+
+
+@atexit.register
+def close_listening_socket_at_exit():
+    log.info("exiting...")
+    for s in _listening_sockets:
+        log.info("closing: {}".format(s))
+        try_close(s)
 
 
 class Master:
@@ -249,6 +260,7 @@ class Master:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.bind(self.communicate_addr)
         sock.listen(10)
+        _listening_sockets.append(sock)
         while True:
             conn, addr = sock.accept()
             self.slaver_pool.append({
@@ -263,6 +275,7 @@ class Master:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.bind(self.customer_listen_addr)
         sock.listen(20)
+        _listening_sockets.append(sock)
         while True:
             conn_customer, addr_customer = sock.accept()
             log.info("Serving customer: {} Total customers: {}".format(
