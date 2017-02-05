@@ -60,14 +60,9 @@ class Master:
         )
 
         # prepare assign_slaver_daemon
-        self.thread_pool["assign_slaver_daemon1"] = threading.Thread(
+        self.thread_pool["assign_slaver_daemon"] = threading.Thread(
             target=self._assign_slaver_daemon,
-            name="assign_slaver_daemon1-{}".format(_fmt_communicate_addr),
-            daemon=True,
-        )
-        self.thread_pool["assign_slaver_daemon2"] = threading.Thread(
-            target=self._assign_slaver_daemon,
-            name="assign_slaver_daemon2-{}".format(_fmt_communicate_addr),
+            name="assign_slaver_daemon-{}".format(_fmt_communicate_addr),
             daemon=True,
         )
 
@@ -76,8 +71,7 @@ class Master:
             self.thread_pool["listen_slaver"].start()
         self.thread_pool["heart_beat_daemon"].start()
         self.thread_pool["listen_customer"].start()
-        self.thread_pool["assign_slaver_daemon1"].start()
-        self.thread_pool["assign_slaver_daemon2"].start()
+        self.thread_pool["assign_slaver_daemon"].start()
         self.thread_pool["socket_bridge"] = self.socket_bridge.start_as_daemon()
 
         while True:

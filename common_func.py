@@ -31,8 +31,8 @@ SECRET_KEY = "shootback"
 # notice: working slaver would NEVER timeout
 SPARE_SLAVER_TTL = 600
 # internal program version, appears in CtrlPkg
-INTERNAL_VERSION = 0x0005
-__version__ = (2, 2, 0, INTERNAL_VERSION)
+INTERNAL_VERSION = 0x0006
+__version__ = (2, 2, 1, INTERNAL_VERSION)
 
 # just a logger
 log = logging.getLogger(__name__)
@@ -152,7 +152,7 @@ class SocketBridge:
         while True:
             if not self.conn_rd:
                 # sleep if there is no connections
-                time.sleep(0.1)
+                time.sleep(0.06)
                 continue
 
             # blocks until there is socket(s) ready for .recv
@@ -183,8 +183,7 @@ class SocketBridge:
                     self.map[s].send(buff[:rec_len])
                 except:
                     # unable to send, close connection
-                    self._wr_shutdown(s)
-                    log.debug(e)
+                    self._rd_shutdown(s)
                     continue
 
     def _rd_shutdown(self, conn, once=False):
@@ -199,7 +198,7 @@ class SocketBridge:
         except:
             pass
 
-        if not once:  # use the `once` param to avoid infinite loop
+        if not once and conn in self.map:  # use the `once` param to avoid infinite loop
             # if a socket is rd_shutdowned, then it's
             #   pair should be wr_shutdown.
             self._wr_shutdown(self.map[conn], True)
@@ -214,15 +213,16 @@ class SocketBridge:
         """action when connection should be write-shutdown
         :type conn: socket.SocketType
         """
-        if not once:  # use the `once` param to avoid infinite loop
-            # if a socket is wr_shutdowned, then it's
-            #   pair should be rd_shutdown.
-            self._rd_shutdown(self.map.get(conn), True)
-
         try:
             conn.shutdown(socket.SHUT_WR)
         except:
             pass
+
+        if not once and conn in self.map:  # use the `once` param to avoid infinite loop
+            #   pair should be rd_shutdown.
+            # if a socket is wr_shutdowned, then it's
+            self._rd_shutdown(self.map[conn], True)
+
 
     def _terminate(self, conn):
         """terminate a sockets pair (two socket)
@@ -237,19 +237,27 @@ class SocketBridge:
             try_close(_mapped_conn)
             if _mapped_conn in self.map:
                 del self.map[_mapped_conn]
+
+            del self.map[conn]  # clean the first socket
         else:
             _mapped_conn = None  # just a fallback
-
-        del self.map[conn]  # clean the first socket
 
         # ------ callback --------
         # because we are not sure which socket are assigned to callback,
         #   so we should try both
         if conn in self.callbacks:
-            self.callbacks[conn]()
+            try:
+                self.callbacks[conn]()
+            except Exception as e:
+                log.error("traceback error: {}".format(e))
+                log.debug(traceback.format_exc())
             del self.callbacks[conn]
         elif _mapped_conn and _mapped_conn in self.callbacks:
-            self.callbacks[_mapped_conn]()
+            try:
+                self.callbacks[_mapped_conn]()
+            except Exception as e:
+                log.error("traceback error: {}".format(e))
+                log.debug(traceback.format_exc())
             del self.callbacks[_mapped_conn]
 
 
