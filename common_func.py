@@ -31,8 +31,8 @@ SECRET_KEY = "shootback"
 # notice: working slaver would NEVER timeout
 SPARE_SLAVER_TTL = 600
 # internal program version, appears in CtrlPkg
-INTERNAL_VERSION = 0x0007
-__version__ = (2, 2, 2, INTERNAL_VERSION)
+INTERNAL_VERSION = 0x0008
+__version__ = (2, 2, 3, INTERNAL_VERSION)
 
 # just a logger
 log = logging.getLogger(__name__)
@@ -158,7 +158,7 @@ class SocketBridge:
             # blocks until there is socket(s) ready for .recv
             # notice: sockets which were closed by remote,
             #   are also regarded as read-ready by select()
-            r, w, e = select.select(self.conn_rd, [], [])
+            r, w, e = select.select(self.conn_rd, [], [], 0.5)
 
             for s in r:  # iter every read-ready or closed sockets
                 try:
