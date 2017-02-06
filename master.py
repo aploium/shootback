@@ -189,17 +189,17 @@ class Master:
                 log.debug(traceback.format_exc())
                 hb_result = False
             finally:
-                time_used = round(time.perf_counter() - start_time, 4)
+                time_used = round((time.perf_counter() - start_time)*1000.0, 2)
             # ------------------ real heartbeat end ----------------------
 
             if not hb_result:
-                log.warning("heart beat failed: {}, time: {}s".format(
+                log.warning("heart beat failed: {}, time: {}ms".format(
                     fmt_addr(addr_slaver), time_used))
                 try_close(slaver["conn_slaver"])
                 del slaver["conn_slaver"]
 
             else:
-                log.debug("heart beat success: {}, time: {}s".format(
+                log.debug("heart beat success: {}, time: {}ms".format(
                     fmt_addr(addr_slaver), time_used))
                 self.slaver_pool.append(slaver)
 
