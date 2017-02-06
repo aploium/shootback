@@ -41,9 +41,38 @@ class Slaver:
 
         return sock
 
-    def _waiting_handshake_or_ctrlpkg(self, conn_slaver):
+    def _response_heartbeat(self, conn_slaver, hb_from_master):
+        # assert isinstance(hb_from_master, CtrlPkg)
+        # assert isinstance(conn_slaver, socket.SocketType)
+        if hb_from_master.prgm_ver < 0x000B:
+            # shootback before 2.2.5-r10 use two-way heartbeat
+            #   so just send a heart_beat pkg back
+            conn_slaver.send(CtrlPkg.pbuild_heart_beat().raw)
+            return True
+        else:
+            # newer version use TCP-like 3-way heartbeat
+            #   the older 2-way heartbeat can't only ensure the
+            #   master --> slaver pathway is OK, but the reverse
+            #   communicate may down. So we need a TCP-like 3-way
+            #   heartbeat
+            conn_slaver.send(CtrlPkg.pbuild_heart_beat().raw)
+            pkg, verify = CtrlPkg.recv(
+                conn_slaver,
+                expect_ptype=CtrlPkg.PTYPE_HEART_BEAT)  # type: CtrlPkg,bool
+            if verify:
+                log.debug("heartbeat success {}".format(
+                    fmt_addr(conn_slaver.getsockname())))
+                return True
+            else:
+                log.warning(
+                    "received a wrong pkg[{}] during heartbeat, {}".format(
+                        pkg, conn_slaver.getsockname()
+                    ))
+                return False
+
+    def _stage_ctrlpkg(self, conn_slaver):
         """
-        waiting handshake or CtrlPkg before real data transfer
+        handling CtrlPkg until handshake
 
         well, there is only one CtrlPkg: heartbeat, yet
 
@@ -67,9 +96,7 @@ class Slaver:
             # timeout is set to `SPARE_SLAVER_TTL`
             # which means if not receive pkg from master in SPARE_SLAVER_TTL seconds,
             #   this connection would expire and re-connect
-            buff = select_recv(conn_slaver, CtrlPkg.PACKAGE_SIZE, SPARE_SLAVER_TTL)
-
-            pkg, verify = CtrlPkg.decode_verify(buff)  # type: CtrlPkg,bool
+            pkg, verify = CtrlPkg.recv(conn_slaver, SPARE_SLAVER_TTL)  # type: CtrlPkg,bool
 
             if not verify:
                 return False
@@ -77,8 +104,9 @@ class Slaver:
             log.debug("CtrlPkg from {}: {}".format(conn_slaver.getpeername(), pkg))
 
             if pkg.pkg_type == CtrlPkg.PTYPE_HEART_BEAT:
-                # if the pkg is heartbeat pkg, do nothing but reset timeout procedure
-                conn_slaver.send(CtrlPkg.pbuild_heart_beat().raw)
+                # if the pkg is heartbeat pkg, enter handshake procedure
+                if not self._response_heartbeat(conn_slaver, pkg):
+                    return False
 
             elif pkg.pkg_type == CtrlPkg.PTYPE_HS_M2S:
                 # 拿到了开始传输的握手包, 进入工作阶段
@@ -99,23 +127,28 @@ class Slaver:
         addr_slaver = conn_slaver.getsockname()
         addr_master = conn_slaver.getpeername()
 
-        # --------- handshaking and handling CtrlPkg -------------
+        # --------- handling CtrlPkg until handshake -------------
         try:
-            hs = self._waiting_handshake_or_ctrlpkg(conn_slaver)
+            hs = self._stage_ctrlpkg(conn_slaver)
         except Exception as e:
-            log.warning("slaver{} waiting handshake failed {}".format(addr_slaver, e))
+            log.warning("slaver{} waiting handshake failed {}".format(
+                fmt_addr(addr_slaver), e))
             log.debug(traceback.print_exc())
             hs = False
+
         if not hs:
             # 握手失败或超时等情况
-            log.warning("bad handshake from: {} {}".format(addr_master, addr_slaver))
+            log.warning("bad handshake or timeout from: {} to {}".format(
+                fmt_addr(addr_master), fmt_addr(addr_slaver)))
             del self.spare_slaver_pool[addr_slaver]
             try_close(conn_slaver)
 
-            log.warning("a slaver[{}] abort due to handshake error or timeout".format(addr_slaver))
+            log.warning("a slaver[{}] abort due to handshake error or timeout".format(
+                fmt_addr(addr_slaver)))
             return
         else:
-            log.info("Success master handshake from: {}".format(addr_master))
+            log.info("Success master handshake from: {} to {}".format(
+                fmt_addr(addr_master), fmt_addr(addr_slaver)))
 
         # ----------- slaver activated! ------------
         # move self from spare_slaver_pool to working_pool
@@ -250,8 +283,8 @@ Tips: ANY service using TCP is shootback-able.  HTTP/FTP/Proxy/SSH/VNC/...
     parser.add_argument("-q", "--quiet", action="count", default=0,
                         help="quiet output, only display warning and errors, use two to disable output")
     parser.add_argument("-V", "--version", action="version", version="shootback {}-slaver".format(version_info()))
-    parser.add_argument("--ttl", default=600, type=int, dest="SPARE_SLAVER_TTL",
-                        help="standing-by slaver's TTL, default is 600. "
+    parser.add_argument("--ttl", default=300, type=int, dest="SPARE_SLAVER_TTL",
+                        help="standing-by slaver's TTL, default is 300. "
                              "this value is optimized for most cases")
     parser.add_argument("--max-standby", default=5, type=int, dest="max_spare_count",
                         help="max standby slaver TCP connections count, default is 5. "

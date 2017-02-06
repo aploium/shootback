@@ -123,11 +123,23 @@ class Master:
         """send and verify heartbeat pkg"""
         conn_slaver.send(CtrlPkg.pbuild_heart_beat().raw)
 
-        buff = select_recv(conn_slaver, CtrlPkg.PACKAGE_SIZE, 3)
-        if buff is None:
+        pkg, verify = CtrlPkg.recv(
+            conn_slaver, expect_ptype=CtrlPkg.PTYPE_HEART_BEAT)  # type: CtrlPkg,bool
+
+        if not verify:
             return False
 
-        pkg, verify = CtrlPkg.decode_verify(buff, CtrlPkg.PTYPE_HEART_BEAT)
+        if pkg.prgm_ver < 0x000B:
+            # shootback before 2.2.5-r10 use two-way heartbeat
+            #   so there is no third pkg to send
+            pass
+        else:
+            # newer version use TCP-like 3-way heartbeat
+            #   the older 2-way heartbeat can't only ensure the
+            #   master --> slaver pathway is OK, but the reverse
+            #   communicate may down. So we need a TCP-like 3-way
+            #   heartbeat
+            conn_slaver.send(CtrlPkg.pbuild_heart_beat().raw)
 
         return verify
 
@@ -140,13 +152,14 @@ class Master:
             使得一轮循环的时间小于TTL,
             保证每个slaver都在过期前能被心跳保活
         """
-        default_delay = 5 + SPARE_SLAVER_TTL // 5
+        default_delay = 5 + SPARE_SLAVER_TTL // 12
         delay = default_delay
         log.info("heart beat daemon start, delay: {}s".format(delay))
         while True:
             time.sleep(delay)
-            log.debug("heart_beat_daemon: hello! im weak")
+            # log.debug("heart_beat_daemon: hello! im weak")
 
+            # ---------------------- preparation -----------------------
             slaver_count = len(self.slaver_pool)
             if not slaver_count:
                 log.warning("heart_beat_daemon: sorry, no slaver available, keep sleeping")
@@ -154,31 +167,40 @@ class Master:
                 delay = default_delay
                 continue
             else:
-                # notice this `(slaver_count + 1)`
+                # notice this `slaver_count*2 + 1`
                 # slaver will expire and re-connect if didn't receive
                 #   heartbeat pkg after SPARE_SLAVER_TTL seconds.
                 # set delay to be short enough to let every slaver receive heartbeat
                 #   before expire
-                delay = 1 + SPARE_SLAVER_TTL // (slaver_count + 1)
+                delay = 1 + SPARE_SLAVER_TTL // max(slaver_count * 2 + 1, 12)
 
             # pop the oldest slaver
             #   heartbeat it and then put it to the end of queue
             slaver = self.slaver_pool.popleft()
             addr_slaver = slaver["addr_slaver"]
 
+            # ------------------ real heartbeat begin --------------------
+            start_time = time.perf_counter()
             try:
                 hb_result = self._send_heartbeat(slaver["conn_slaver"])
             except Exception as e:
-                log.warning("error during heatbeat to {}: {}".format(addr_slaver, e))
+                log.warning("error during heartbeat to {}: {}".format(
+                    fmt_addr(addr_slaver), e))
                 log.debug(traceback.format_exc())
                 hb_result = False
+            finally:
+                time_used = round(time.perf_counter() - start_time, 4)
+            # ------------------ real heartbeat end ----------------------
+
             if not hb_result:
-                log.warning("heart beat failed: {}".format(addr_slaver))
+                log.warning("heart beat failed: {}, time: {}s".format(
+                    fmt_addr(addr_slaver), time_used))
                 try_close(slaver["conn_slaver"])
                 del slaver["conn_slaver"]
 
             else:
-                log.debug("heart beat success: {}".format(addr_slaver))
+                log.debug("heart beat success: {}, time: {}s".format(
+                    fmt_addr(addr_slaver), time_used))
                 self.slaver_pool.append(slaver)
 
     @staticmethod
@@ -352,8 +374,8 @@ Tips: ANY service using TCP is shootback-able.  HTTP/FTP/Proxy/SSH/VNC/...
     parser.add_argument("-q", "--quiet", action="count", default=0,
                         help="quiet output, only display warning and errors, use two to disable output")
     parser.add_argument("-V", "--version", action="version", version="shootback {}-master".format(version_info()))
-    parser.add_argument("--ttl", default=600, type=int, dest="SPARE_SLAVER_TTL",
-                        help="standing-by slaver's TTL, default is 600. "
+    parser.add_argument("--ttl", default=300, type=int, dest="SPARE_SLAVER_TTL",
+                        help="standing-by slaver's TTL, default is 300. "
                              "In master side, this value affects heart-beat frequency. "
                              "Default value is optimized for most cases")
 

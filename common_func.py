@@ -23,16 +23,16 @@ except:
 RECV_BUFFER_SIZE = 2 ** 14
 # default secretkey, use -k/--secretkey to change
 SECRET_KEY = "shootback"
-# how long a SPARE slaver would keep 600s
+# how long a SPARE slaver would keep 300s
 # once slaver received an heart-beat package from master,
 #   the TTL would be reset. And heart-beat delay is less than TTL,
 #   so, theoretically, spare slaver never timeout,
 #   except network failure
 # notice: working slaver would NEVER timeout
-SPARE_SLAVER_TTL = 600
+SPARE_SLAVER_TTL = 300
 # internal program version, appears in CtrlPkg
-INTERNAL_VERSION = 0x000A
-__version__ = (2, 2, 5, INTERNAL_VERSION)
+INTERNAL_VERSION = 0x000B
+__version__ = (2, 2, 6, INTERNAL_VERSION)
 
 # just a logger
 log = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ def version_info():
 def configure_logging(level):
     logging.basicConfig(
         level=level,
-        format='[%(levelname)s %(asctime)s %(funcName)s] %(message)s',
+        format='[%(levelname)s %(asctime)s] %(message)s',
     )
 
 
@@ -90,12 +90,16 @@ def select_recv(conn, buff_size, timeout=None):
     :type timeout: float
     :rtype: Union[bytes, None]
     """
-    rlist, _, elist = select.select([conn], [], [], timeout)
-    if not rlist or elist:
-        # timeout or exception occurs
-        raise TimeoutError("recv timeout")
+    rlist, _, _ = select.select([conn], [], [], timeout)
+    if not rlist:
+        # timeout
+        raise RuntimeError("recv timeout")
 
-    return conn.recv(buff_size)
+    buff = conn.recv(buff_size)
+    if not buff:
+        raise RuntimeError("received zero bytes, socket was closed")
+
+    return buff
 
 
 class SocketBridge:
@@ -273,20 +277,22 @@ class CtrlPkg:
     使用 big-endian
 
     体积   名称        数据类型           描述
-    1    pkg_ver       char         版本, 目前只能为 0x01
-    1    pkg_type    signed char        包类型 *1
-    2    prgm_ver    unsigned short    程序版本 *2
-    20      N/A       padding          预留
-    40    data        bytes           数据区 *3
+    1    pkg_ver       char            包版本  *1
+    1    pkg_type    signed char        包类型 *2
+    2    prgm_ver    unsigned short    程序版本 *3
+    20    N/A          N/A              预留
+    40    data        bytes           数据区 *4
 
-    *1: 包类型. 除心跳外, 所有负数包代表由Slaver发出, 正数包由Master发出
+    *1: 包版本. 包整体结构的定义版本, 目前只有 0x01
+
+    *2: 包类型. 除心跳外, 所有负数包代表由Slaver发出, 正数包由Master发出
         -1: Slaver-->Master 的握手响应包       PTYPE_HS_S2M
          0: 心跳包                            PTYPE_HEART_BEAT
         +1: Master-->Slaver 的握手包          PTYPE_HS_M2S
 
-    *2: 默认即为 INTERNAL_VERSION
+    *3: 默认即为 INTERNAL_VERSION
 
-    *3: 数据区中的内容由各个类型的包自身定义
+    *4: 数据区中的内容由各个类型的包自身定义
 
     -------------- 数据区定义 ------------------
     包类型: -1 (Slaver-->Master 的握手响应包)
@@ -305,6 +311,7 @@ class CtrlPkg:
 
     """
     PACKAGE_SIZE = 2 ** 6  # 64 bytes
+    CTRL_PKG_TIMEOUT = 5  # CtrlPkg recv timeout, in second
 
     # CRC32 for SECRET_KEY and Reversed(SECRET_KEY)
     SECRET_KEY_CRC32 = binascii.crc32(SECRET_KEY.encode('utf-8')) & 0xffffffff
@@ -490,3 +497,14 @@ class CtrlPkg:
             )
         else:
             return cls._prebuilt_pkg(cls.PTYPE_HEART_BEAT, cls.pbuild_heart_beat)
+
+    @classmethod
+    def recv(cls, sock, timeout=CTRL_PKG_TIMEOUT, expect_ptype=None):
+        """just a shortcut function
+        :param sock: which socket to recv CtrlPkg from
+        :type sock: socket.SocketType
+        :rtype: CtrlPkg,bool
+        """
+        buff = select_recv(sock, cls.PACKAGE_SIZE, timeout)
+        pkg, verify = CtrlPkg.decode_verify(buff, pkg_type=expect_ptype)  # type: CtrlPkg,bool
+        return pkg, verify
