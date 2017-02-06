@@ -15,6 +15,17 @@ def close_listening_socket_at_exit():
         try_close(s)
 
 
+def try_bind_port(sock, addr):
+    while True:
+        try:
+            sock.bind(addr)
+        except Exception as e:
+            log.error(("unable to bind {}, {}. If this port was used by the recently-closed shootback itself\n"
+                       "then don't worry, it would be available in several seconds\n"
+                       "we'll keep trying....").format(addr, e))
+            time.sleep(3)
+
+
 class Master:
     def __init__(self, customer_listen_addr, communicate_addr=None,
                  slaver_pool=None, working_pool=None):
@@ -262,7 +273,7 @@ class Master:
 
     def _listen_slaver(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(self.communicate_addr)
+        try_bind_port(sock, self.communicate_addr)
         sock.listen(10)
         _listening_sockets.append(sock)
         while True:
@@ -277,7 +288,7 @@ class Master:
 
     def _listen_customer(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(self.customer_listen_addr)
+        try_bind_port(sock, self.customer_listen_addr)
         sock.listen(20)
         _listening_sockets.append(sock)
         while True:
