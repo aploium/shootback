@@ -91,4 +91,8 @@ slaver is __single file__ and only depends on python(2.7/3.4+) standard library.
    [it's limit in windows is 2048](https://github.com/ContinuumIO/anaconda-issues/issues/1241)
 
 
+## Performance
 
+1. in my laptop of intel I7-4710MQ, win10 x64:
+    * 1.6Gbits/s of loopback transfer (using iperf), with about 5% CPU occupation.
+    * 800 thread ApacheBench, with less than 1% CPU and 8MB memory consume
