@@ -23,6 +23,7 @@ def try_bind_port(sock, addr):
             log.error(("unable to bind {}, {}. If this port was used by the recently-closed shootback itself\n"
                        "then don't worry, it would be available in several seconds\n"
                        "we'll keep trying....").format(addr, e))
+            log.debug(traceback.format_exc())
             time.sleep(3)
 
 
