@@ -44,9 +44,22 @@ slaver is __single file__ and only depends on python(2.7/3.4+) standard library.
     # -- some HTML content from example.com --
     # -- some HTML content from example.com --
     ```
+5. a more reality example:  
+    assume your master is 22.33.44.55 (just like the graph above)
+    ```bash
+    # slaver_local_ssh <---> slaver <--> master(22.33.44.55) <--> You
+    
+    # ---- master ----
+    python3 master.py -m 127.0.0.1:10000 -c 127.0.0.1:10022
+    
+    # ---- slaver ----
+    python(or python3) slaver.py -m 22.33.44.55:10000 -t 127.0.0.1:22
+    
+    # ---- YOU ----
+    ssh 22.33.44.55 -p 10022
+    ```
 
-5. for more help, please see `python3 master.py --help` and `python3 slaver.py --help`
-
+6. for more help, please see `python3 master.py --help` and `python3 slaver.py --help`
 
 ## Tips
 

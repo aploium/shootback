@@ -348,7 +348,7 @@ Example1:
 tunnel local ssh to public internet, assume master's ip is 1.2.3.4
   Master(this pc):                master.py -m 0.0.0.0:10000 -c 0.0.0.0:10022
   Slaver(another private pc):     slaver.py -m 1.2.3.4:10000 -t 127.0.0.1:22
-  Customer(any internet user):    ssh 1.2.3.4:10022
+  Customer(any internet user):    ssh 1.2.3.4 -p 10022
   the actual traffic is:  customer <--> master(1.2.3.4 this pc) <--> slaver(private network) <--> ssh(private network)
 
 Example2:
