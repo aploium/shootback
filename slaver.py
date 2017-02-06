@@ -63,7 +63,8 @@ class Slaver:
         """
         while True:  # 可能会有一段时间的心跳包
 
-            # recv timeout is set to `SPARE_SLAVER_TTL`
+            # recv master --> slaver
+            # timeout is set to `SPARE_SLAVER_TTL`
             # which means if not receive pkg from master in SPARE_SLAVER_TTL seconds,
             #   this connection would expire and re-connect
             buff = select_recv(conn_slaver, CtrlPkg.PACKAGE_SIZE, SPARE_SLAVER_TTL)
@@ -77,22 +78,15 @@ class Slaver:
 
             if pkg.pkg_type == CtrlPkg.PTYPE_HEART_BEAT:
                 # if the pkg is heartbeat pkg, do nothing but reset timeout procedure
-
-                try:
-                    conn_slaver.send(CtrlPkg.pbuild_heart_beat().raw)
-                except:
-                    return False
+                conn_slaver.send(CtrlPkg.pbuild_heart_beat().raw)
 
             elif pkg.pkg_type == CtrlPkg.PTYPE_HS_M2S:
                 # 拿到了开始传输的握手包, 进入工作阶段
 
                 break
 
-        try:
-            # send slaver hello --> master
-            conn_slaver.send(CtrlPkg.pbuild_hs_s2m().raw)
-        except:
-            return False
+        # send slaver hello --> master
+        conn_slaver.send(CtrlPkg.pbuild_hs_s2m().raw)
 
         return True
 
@@ -109,12 +103,12 @@ class Slaver:
         try:
             hs = self._waiting_handshake_or_ctrlpkg(conn_slaver)
         except Exception as e:
-            log.warning("slaver waiting handshake failed {}".format(e))
+            log.warning("slaver{} waiting handshake failed {}".format(addr_slaver, e))
             log.debug(traceback.print_exc())
             hs = False
         if not hs:
             # 握手失败或超时等情况
-            log.warning("bad handshake from: {}".format(addr_master))
+            log.warning("bad handshake from: {} {}".format(addr_master, addr_slaver))
             del self.spare_slaver_pool[addr_slaver]
             try_close(conn_slaver)
 

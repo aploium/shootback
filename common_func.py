@@ -31,8 +31,8 @@ SECRET_KEY = "shootback"
 # notice: working slaver would NEVER timeout
 SPARE_SLAVER_TTL = 600
 # internal program version, appears in CtrlPkg
-INTERNAL_VERSION = 0x0009
-__version__ = (2, 2, 4, INTERNAL_VERSION)
+INTERNAL_VERSION = 0x000A
+__version__ = (2, 2, 5, INTERNAL_VERSION)
 
 # just a logger
 log = logging.getLogger(__name__)
@@ -90,10 +90,10 @@ def select_recv(conn, buff_size, timeout=None):
     :type timeout: float
     :rtype: Union[bytes, None]
     """
-    rlist, _, elist = select.select([conn], [], [conn], timeout)
+    rlist, _, elist = select.select([conn], [], [], timeout)
     if not rlist or elist:
         # timeout or exception occurs
-        return None
+        raise TimeoutError("recv timeout")
 
     return conn.recv(buff_size)
 
@@ -425,7 +425,7 @@ class CtrlPkg:
         :type raw: bytes
         :rtype: CtrlPkg
         """
-        if len(raw) != cls.PACKAGE_SIZE:
+        if not raw or len(raw) != cls.PACKAGE_SIZE:
             raise ValueError("content size should be {}, but {}".format(
                 cls.PACKAGE_SIZE, len(raw)
             ))

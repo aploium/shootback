@@ -150,17 +150,21 @@ class Master:
             # pop the oldest slaver
             #   heartbeat it and then put it to the end of queue
             slaver = self.slaver_pool.popleft()
+            addr_slaver = slaver["addr_slaver"]
 
             try:
                 hb_result = self._send_heartbeat(slaver["conn_slaver"])
-            except:
+            except Exception as e:
+                log.warning("error during heatbeat to {}: {}".format(addr_slaver, e))
+                log.debug(traceback.format_exc())
                 hb_result = False
             if not hb_result:
-                log.warning("heart beat failed: {}".format(slaver["addr_slaver"]))
+                log.warning("heart beat failed: {}".format(addr_slaver))
+                try_close(slaver["conn_slaver"])
                 del slaver["conn_slaver"]
 
             else:
-                log.debug("heart beat success: {}".format(slaver["addr_slaver"]))
+                log.debug("heart beat success: {}".format(addr_slaver))
                 self.slaver_pool.append(slaver)
 
     @staticmethod
