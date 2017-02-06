@@ -2,7 +2,8 @@
 
 shootback is a reverse TCP tunnel let you access target behind NAT or firewall  
 反向TCP隧道, 使得NAT或防火墙后的内网机器可以被外网访问.  
-Consumes less than 1% CPU and 8MB memory under 800 concurrency.
+Consumes less than 1% CPU and 8MB memory under 800 concurrency.  
+slaver is __single file__ and only depends on python(2.7/3.4+) standard library.
 
 ## How it works
 
