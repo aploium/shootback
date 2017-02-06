@@ -28,7 +28,7 @@ slaver is __single file__ and only depends on python(2.7/3.4+) standard library.
     * Slaver: Python2.7/3.4+, OS independent
     * no external dependencies, only python std lib
 2. download `git clone https://github.com/aploium/shootback`
-3. (optional) if you need a single-file slaver.py, run `python3 build_standalone_slaver.py`
+3. (optional) if you need a single-file slaver.py, run `python3 build_singlefile_slaver.py`
 4. run these command
     ```bash
     # master listen :10000 for slaver, :10080 for you

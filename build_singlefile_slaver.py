@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # coding=utf-8
 
-def build_standalone_slaver(outfile_name="slaver_standalone.py"):
+def build_singlefile_slaver(outfile_name="slaver_singlefile.py"):
     import os
     import shutil
     base_path = os.path.dirname(os.path.abspath(__file__))
@@ -32,4 +32,4 @@ def build_standalone_slaver(outfile_name="slaver_standalone.py"):
 
 
 if __name__ == '__main__':
-    build_standalone_slaver()
+    build_singlefile_slaver()
