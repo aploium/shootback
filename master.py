@@ -25,6 +25,8 @@ def try_bind_port(sock, addr):
                        "we'll keep trying....").format(addr, e))
             log.debug(traceback.format_exc())
             time.sleep(3)
+        else:
+            break
 
 
 class Master:
