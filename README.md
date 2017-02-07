@@ -20,6 +20,8 @@ slaver is __single file__ and only depends on python(2.7/3.4+) standard library.
    辅助内网渗透
 4. Help CTF offline competitions.  
    辅助CTF线下赛, 使场外选手也获得比赛网络环境
+5. Connect to device with dynamic IP, such as ADSL  
+   连接动态IP的设备, 如ADSL
 
 ## Getting started
 
