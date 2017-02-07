@@ -31,8 +31,8 @@ SECRET_KEY = "shootback"
 # notice: working slaver would NEVER timeout
 SPARE_SLAVER_TTL = 300
 # internal program version, appears in CtrlPkg
-INTERNAL_VERSION = 0x000B
-__version__ = (2, 2, 6, INTERNAL_VERSION)
+INTERNAL_VERSION = 0x000C
+__version__ = (2, 2, 7, INTERNAL_VERSION)
 
 # just a logger
 log = logging.getLogger(__name__)
