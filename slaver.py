@@ -4,6 +4,9 @@ from __future__ import print_function, unicode_literals, division, absolute_impo
 
 from common_func import *
 
+__author__ = "Aploium <i@z.codes>"
+__website__ = "https://github.com/aploium/shootback"
+
 
 class Slaver:
     """
@@ -135,11 +138,13 @@ class Slaver:
                 fmt_addr(addr_slaver), e))
             log.debug(traceback.print_exc())
             hs = False
+        else:
+            if not hs:
+                log.warning("bad handshake or timeout between: {} and {}".format(
+                    fmt_addr(addr_master), fmt_addr(addr_slaver)))
 
         if not hs:
-            # 握手失败或超时等情况
-            log.warning("bad handshake or timeout from: {} to {}".format(
-                fmt_addr(addr_master), fmt_addr(addr_slaver)))
+            # handshake failed or timeout
             del self.spare_slaver_pool[addr_slaver]
             try_close(conn_slaver)
 
@@ -220,8 +225,8 @@ class Slaver:
                 t.start()
 
                 log.info("connected to master[{}] at {} total: {}".format(
-                    conn_slaver.getpeername(),
-                    conn_slaver.getsockname(),
+                    fmt_addr(conn_slaver.getpeername()),
+                    fmt_addr(conn_slaver.getsockname()),
                     len(self.spare_slaver_pool),
                 ))
             except Exception as e:
@@ -239,7 +244,7 @@ class Slaver:
 
 def run_slaver(communicate_addr, target_addr, max_spare_count=5):
     log.info("running as slaver, master addr: {} target: {}".format(
-        communicate_addr, target_addr
+        fmt_addr(communicate_addr), fmt_addr(target_addr)
     ))
 
     Slaver(communicate_addr, target_addr, max_spare_count=max_spare_count).serve_forever()
@@ -321,7 +326,8 @@ def main_slaver():
             level = logging.INFO
         configure_logging(level)
 
-    log.info("{} slaver running".format(version_info()))
+    log.info("shootback {} slaver running".format(version_info()))
+    log.info("author: {}  site: {}".format(__author__, __website__))
     log.info("Master: {}".format(fmt_addr(communicate_addr)))
     log.info("Target: {}".format(fmt_addr(target_addr)))
 

@@ -21,18 +21,23 @@ except:
 
 # socket recv buffer, 16384 bytes
 RECV_BUFFER_SIZE = 2 ** 14
+
 # default secretkey, use -k/--secretkey to change
 SECRET_KEY = "shootback"
-# how long a SPARE slaver would keep 300s
+
+# how long a SPARE slaver would keep
 # once slaver received an heart-beat package from master,
 #   the TTL would be reset. And heart-beat delay is less than TTL,
 #   so, theoretically, spare slaver never timeout,
 #   except network failure
 # notice: working slaver would NEVER timeout
 SPARE_SLAVER_TTL = 300
+
 # internal program version, appears in CtrlPkg
-INTERNAL_VERSION = 0x000C
-__version__ = (2, 2, 7, INTERNAL_VERSION)
+INTERNAL_VERSION = 0x000D
+
+# version for human readable
+__version__ = (2, 2, 8, INTERNAL_VERSION)
 
 # just a logger
 log = logging.getLogger(__name__)
@@ -277,7 +282,7 @@ class CtrlPkg:
     使用 big-endian
 
     体积   名称        数据类型           描述
-    1    pkg_ver       char            包版本  *1
+    1    pkg_ver    unsigned char       包版本  *1
     1    pkg_type    signed char        包类型 *2
     2    prgm_ver    unsigned short    程序版本 *3
     20    N/A          N/A              预留
@@ -331,7 +336,7 @@ class CtrlPkg:
     # formats
     # see https://docs.python.org/3/library/struct.html#format-characters
     #   for format syntax
-    FORMAT_PKG = "!c b H 20x 40s"
+    FORMAT_PKG = "!b b H 20x 40s"
     FORMATS_DATA = {
         PTYPE_HS_S2M: "!I 36x",
         PTYPE_HEART_BEAT: "!40x",
@@ -340,7 +345,7 @@ class CtrlPkg:
 
     _cache_prebuilt_pkg = {}  # cache
 
-    def __init__(self, pkg_ver=b'\x01', pkg_type=0,
+    def __init__(self, pkg_ver=0x01, pkg_type=0,
                  prgm_ver=INTERNAL_VERSION, data=(),
                  raw=None,
                  ):

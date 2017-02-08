@@ -5,6 +5,8 @@ import queue
 import atexit
 
 _listening_sockets = []  # for close at exit
+__author__ = "Aploium <i@z.codes>"
+__website__ = "https://github.com/aploium/shootback"
 
 
 @atexit.register
@@ -204,7 +206,7 @@ class Master:
                 delay = 0
 
             else:
-                log.debug("heart beat success: {}, time: {}ms".format(
+                log.debug("heartbeat success: {}, time: {}ms".format(
                     fmt_addr(addr_slaver), time_used))
                 self.slaver_pool.append(slaver)
 
@@ -306,6 +308,8 @@ class Master:
         try_bind_port(sock, self.communicate_addr)
         sock.listen(10)
         _listening_sockets.append(sock)
+        log.info("Listening for slavers: {}".format(
+            fmt_addr(self.communicate_addr)))
         while True:
             conn, addr = sock.accept()
             self.slaver_pool.append({
@@ -313,7 +317,7 @@ class Master:
                 "conn_slaver": conn,
             })
             log.info("Got slaver {} Total: {}".format(
-                addr, len(self.slaver_pool)
+                fmt_addr(addr), len(self.slaver_pool)
             ))
 
     def _listen_customer(self):
@@ -321,6 +325,8 @@ class Master:
         try_bind_port(sock, self.customer_listen_addr)
         sock.listen(20)
         _listening_sockets.append(sock)
+        log.info("Listening for customers: {}".format(
+            fmt_addr(self.customer_listen_addr)))
         while True:
             conn_customer, addr_customer = sock.accept()
             log.info("Serving customer: {} Total customers: {}".format(
@@ -334,9 +340,10 @@ class Master:
 
 
 def run_master(communicate_addr, customer_listen_addr):
-    log.info("{} running as master, slaver from: {} customer_from: {}".format(
-        version_info(), communicate_addr, customer_listen_addr
-    ))
+    log.info("shootback {} running as master".format(version_info()))
+    log.info("author: {}  site: {}".format(__author__, __website__))
+    log.info("slaver from: {} customer from: {}".format(
+        fmt_addr(communicate_addr), fmt_addr(customer_listen_addr)))
 
     Master(customer_listen_addr, communicate_addr).serve_forever()
 
@@ -412,15 +419,6 @@ def main_master():
         else:
             level = logging.INFO
         configure_logging(level)
-
-    log.info("shootback master running")
-    log.info("Listening for slavers: {}".format(fmt_addr(communicate_addr)))
-    log.info("Listening for customers: {}".format(fmt_addr(customer_listen_addr)))
-
-    # communicate_addr = ("localhost", 10000)
-    # customer_listen_addr = ("localhost", 10080)
-    # target_addr = ("localhost", 1080)
-    # target_addr = ("93.184.216.34", 80)  # www.example.com
 
     run_master(communicate_addr, customer_listen_addr)
 
