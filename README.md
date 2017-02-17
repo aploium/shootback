@@ -34,7 +34,7 @@ slaver is __single file__ and only depends on python(2.7/3.4+) standard library.
 4. run these command
     ```bash
     # master listen :10000 for slaver, :10080 for you
-    python3 master.py -m 127.0.0.1:10000 -c 127.0.0.1:10080
+    python3 master.py -m 0.0.0.0:10000 -c 127.0.0.1:10080
     
     # slaver connect to master, and use example.com as tunnel target
     # ps: you can use python2 in slaver, not only py3
@@ -52,7 +52,7 @@ slaver is __single file__ and only depends on python(2.7/3.4+) standard library.
     # slaver_local_ssh <---> slaver <--> master(22.33.44.55) <--> You
     
     # ---- master ----
-    python3 master.py -m 127.0.0.1:10000 -c 127.0.0.1:10022
+    python3 master.py -m 0.0.0.0:10000 -c 0.0.0.0:10022
     
     # ---- slaver ----
     python(or python3) slaver.py -m 22.33.44.55:10000 -t 127.0.0.1:22
