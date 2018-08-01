@@ -31,7 +31,7 @@ def try_bind_port(sock, addr):
             break
 
 
-class Master:
+class Master(object):
     def __init__(self, customer_listen_addr, communicate_addr=None,
                  slaver_pool=None, working_pool=None):
         """

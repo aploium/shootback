@@ -8,10 +8,16 @@ import struct
 import collections
 import logging
 import socket
-import select
+import functools
 import threading
 import traceback
-import functools
+
+try:
+    import selectors
+except ImportError:
+    import select
+
+    selectors = None
 
 try:
     # for pycharm type hinting
@@ -34,10 +40,10 @@ SECRET_KEY = "shootback"
 SPARE_SLAVER_TTL = 300
 
 # internal program version, appears in CtrlPkg
-INTERNAL_VERSION = 0x000D
+INTERNAL_VERSION = 0x000E
 
 # version for human readable
-__version__ = (2, 2, 8, INTERNAL_VERSION)
+__version__ = (2, 3, 0, INTERNAL_VERSION)
 
 # just a logger
 log = logging.getLogger(__name__)
@@ -95,10 +101,16 @@ def select_recv(conn, buff_size, timeout=None):
     :type timeout: float
     :rtype: Union[bytes, None]
     """
-    rlist, _, _ = select.select([conn], [], [], timeout)
-    if not rlist:
-        # timeout
-        raise RuntimeError("recv timeout")
+    if selectors:
+        sel = selectors.DefaultSelector()
+        sel.register(conn, selectors.EVENT_READ)
+        events = sel.select(timeout)
+        sel.close()
+        if not events:
+            # timeout
+            raise RuntimeError("recv timeout")
+    else:
+        rlist, _, _ = select.select([conn], [], [], timeout)
 
     buff = conn.recv(buff_size)
     if not buff:
@@ -107,7 +119,7 @@ def select_recv(conn, buff_size, timeout=None):
     return buff
 
 
-class SocketBridge:
+class SocketBridge(object):
     """
     transfer data between sockets
     """
@@ -116,6 +128,11 @@ class SocketBridge:
         self.conn_rd = set()  # record readable-sockets
         self.map = {}  # record sockets pairs
         self.callbacks = {}  # record callbacks
+
+        if selectors:
+            self.sel = selectors.DefaultSelector()
+        else:
+            self.sel = None
 
     def add_conn_pair(self, conn1, conn2, callback=None):
         """
@@ -137,6 +154,10 @@ class SocketBridge:
         # record callback
         if callback is not None:
             self.callbacks[conn1] = callback
+
+        if selectors:
+            self.sel.register(conn1, selectors.EVENT_READ)
+            self.sel.register(conn2, selectors.EVENT_READ)
 
     def start_as_daemon(self):
         t = threading.Thread(target=self.start)
@@ -167,9 +188,14 @@ class SocketBridge:
             # blocks until there is socket(s) ready for .recv
             # notice: sockets which were closed by remote,
             #   are also regarded as read-ready by select()
-            r, w, e = select.select(self.conn_rd, [], [], 0.5)
+            if selectors:
+                events = self.sel.select(0.5)
+                socks = (key.fileobj for key, mask in events)
+            else:
+                r, w, e = select.select(self.conn_rd, [], [], 0.5)
+                socks = r
 
-            for s in r:  # iter every read-ready or closed sockets
+            for s in socks:  # iter every read-ready or closed sockets
                 try:
                     # here, we use .recv_into() instead of .recv()
                     #   recv data directly into the pre-allocated buffer
@@ -201,6 +227,8 @@ class SocketBridge:
         """
         if conn in self.conn_rd:
             self.conn_rd.remove(conn)
+            if selectors:
+                self.sel.unregister(conn)
 
         try:
             conn.shutdown(socket.SHUT_RD)
@@ -269,7 +297,7 @@ class SocketBridge:
             del self.callbacks[_mapped_conn]
 
 
-class CtrlPkg:
+class CtrlPkg(object):
     """
     Control Packages of shootback, not completed yet
     current we have: handshake and heartbeat
@@ -336,11 +364,11 @@ class CtrlPkg:
     # formats
     # see https://docs.python.org/3/library/struct.html#format-characters
     #   for format syntax
-    FORMAT_PKG = "!b b H 20x 40s"
+    FORMAT_PKG = b"!b b H 20x 40s"
     FORMATS_DATA = {
-        PTYPE_HS_S2M: "!I 36x",
-        PTYPE_HEART_BEAT: "!40x",
-        PTYPE_HS_M2S: "!I 36x",
+        PTYPE_HS_S2M: b"!I 36x",
+        PTYPE_HEART_BEAT: b"!40x",
+        PTYPE_HS_M2S: b"!I 36x",
     }
 
     _cache_prebuilt_pkg = {}  # cache
@@ -466,6 +494,7 @@ class CtrlPkg:
         try:
             pkg = cls.decode_only(raw)
         except:
+            log.error('unable to decode package. raw: %s', raw, exc_info=True)
             return None, False
         else:
             return pkg, pkg.verify(pkg_type=pkg_type)

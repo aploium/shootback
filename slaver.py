@@ -8,7 +8,7 @@ __author__ = "Aploium <i@z.codes>"
 __website__ = "https://github.com/aploium/shootback"
 
 
-class Slaver:
+class Slaver(object):
     """
     slaver socket阶段
         连接master->等待->心跳(重复)--->握手-->正式传输数据->退出
@@ -210,8 +210,7 @@ class Slaver:
             try:
                 conn_slaver = self._connect_master()
             except Exception as e:
-                log.warning("unable to connect master {}".format(e))
-                log.debug(traceback.format_exc())
+                log.warning("unable to connect master {}".format(e), exc_info=True)
                 time.sleep(err_delay)
                 if err_delay < max_err_delay:
                     err_delay += 1
