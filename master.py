@@ -160,7 +160,7 @@ class Master(object):
         ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
         ctx.check_hostname = False
         ctx.load_default_certs(ssl.Purpose.SERVER_AUTH)
-        ctx.verify_mode = ssl.VerifyMode.CERT_NONE
+        ctx.verify_mode = ssl.CERT_NONE
 
         _certfile = tempfile.mktemp()
         open(_certfile, 'w').write(_DEFAULT_SSL_CERT)

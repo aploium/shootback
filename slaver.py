@@ -38,7 +38,7 @@ class Slaver(object):
         ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         ctx.check_hostname = False
         ctx.load_default_certs(ssl.Purpose.CLIENT_AUTH)
-        ctx.verify_mode = ssl.VerifyMode.CERT_NONE
+        ctx.verify_mode = ssl.CERT_NONE
 
         return ctx
 
