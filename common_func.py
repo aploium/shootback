@@ -20,6 +20,11 @@ except ImportError:
     selectors = None
 
 try:
+    import ssl
+except ImportError:
+    ssl = None
+
+try:
     # for pycharm type hinting
     from typing import Union, Callable
 except:
@@ -40,10 +45,10 @@ SECRET_KEY = "shootback"
 SPARE_SLAVER_TTL = 300
 
 # internal program version, appears in CtrlPkg
-INTERNAL_VERSION = 0x000E
+INTERNAL_VERSION = 0x000F
 
 # version for human readable
-__version__ = (2, 3, 0, INTERNAL_VERSION)
+__version__ = (2, 4, 0, INTERNAL_VERSION)
 
 # just a logger
 log = logging.getLogger(__name__)
@@ -331,6 +336,7 @@ class CtrlPkg(object):
     包类型: -1 (Slaver-->Master 的握手响应包)
         体积   名称           数据类型         描述
          4    crc32_s2m   unsigned int     简单鉴权用 CRC32(Reversed(SECRET_KEY))
+         1    ssl_flag   unsigned char     是否支持SSL
        其余为空
        *注意: -1握手包是把 SECRET_KEY 字符串翻转后取CRC32, +1握手包不预先反转
 
@@ -340,6 +346,7 @@ class CtrlPkg(object):
     包理性: +1 (Master-->Slaver 的握手包)
         体积   名称           数据类型         描述
          4    crc32_m2s   unsigned int     简单鉴权用 CRC32(SECRET_KEY)
+         1    ssl_flag   unsigned char     是否支持SSL
        其余为空
 
     """
@@ -366,12 +373,13 @@ class CtrlPkg(object):
     #   for format syntax
     FORMAT_PKG = b"!b b H 20x 40s"
     FORMATS_DATA = {
-        PTYPE_HS_S2M: b"!I 36x",
+        PTYPE_HS_S2M: b"!I B 35x",
         PTYPE_HEART_BEAT: b"!40x",
-        PTYPE_HS_M2S: b"!I 36x",
+        PTYPE_HS_M2S: b"!I B 35x",
     }
 
-    _cache_prebuilt_pkg = {}  # cache
+    SSL_FLAG_NONE = 0
+    SSL_FLAG_AVAIL = 1
 
     def __init__(self, pkg_ver=0x01, pkg_type=0,
                  prgm_ver=INTERNAL_VERSION, data=(),
@@ -411,15 +419,6 @@ class CtrlPkg(object):
             self.prgm_ver,
             self.data_encode(self.pkg_type, self.data),
         )
-
-    @classmethod
-    def _prebuilt_pkg(cls, pkg_type, fallback):
-        """act as lru_cache"""
-        if pkg_type not in cls._cache_prebuilt_pkg:
-            pkg = fallback(force_rebuilt=True)
-            cls._cache_prebuilt_pkg[pkg_type] = pkg
-
-        return cls._cache_prebuilt_pkg[pkg_type]
 
     @classmethod
     def recalc_crc32(cls):
@@ -500,37 +499,30 @@ class CtrlPkg(object):
             return pkg, pkg.verify(pkg_type=pkg_type)
 
     @classmethod
-    def pbuild_hs_m2s(cls, force_rebuilt=False):
-        """pkg build: Handshake Master to Slaver"""
-        # because py27 do not have functools.lru_cache, so we must write our own
-        if force_rebuilt:
-            return cls(
-                pkg_type=cls.PTYPE_HS_M2S,
-                data=(cls.SECRET_KEY_CRC32,),
-            )
-        else:
-            return cls._prebuilt_pkg(cls.PTYPE_HS_M2S, cls.pbuild_hs_m2s)
+    def pbuild_hs_m2s(cls, ssl_avail=False):
+        """pkg build: Handshake Master to Slaver
+        """
+        ssl_flag = cls.SSL_FLAG_AVAIL if ssl_avail else cls.SSL_FLAG_NONE
+        return cls(
+            pkg_type=cls.PTYPE_HS_M2S,
+            data=(cls.SECRET_KEY_CRC32, ssl_flag),
+        )
 
     @classmethod
-    def pbuild_hs_s2m(cls, force_rebuilt=False):
+    def pbuild_hs_s2m(cls, ssl_avail=False):
         """pkg build: Handshake Slaver to Master"""
-        if force_rebuilt:
-            return cls(
-                pkg_type=cls.PTYPE_HS_S2M,
-                data=(cls.SECRET_KEY_REVERSED_CRC32,),
-            )
-        else:
-            return cls._prebuilt_pkg(cls.PTYPE_HS_S2M, cls.pbuild_hs_s2m)
+        ssl_flag = cls.SSL_FLAG_AVAIL if ssl_avail else cls.SSL_FLAG_NONE
+        return cls(
+            pkg_type=cls.PTYPE_HS_S2M,
+            data=(cls.SECRET_KEY_REVERSED_CRC32, ssl_flag),
+        )
 
     @classmethod
-    def pbuild_heart_beat(cls, force_rebuilt=False):
+    def pbuild_heart_beat(cls):
         """pkg build: Heart Beat Package"""
-        if force_rebuilt:
-            return cls(
-                pkg_type=cls.PTYPE_HEART_BEAT,
-            )
-        else:
-            return cls._prebuilt_pkg(cls.PTYPE_HEART_BEAT, cls.pbuild_heart_beat)
+        return cls(
+            pkg_type=cls.PTYPE_HEART_BEAT,
+        )
 
     @classmethod
     def recv(cls, sock, timeout=CTRL_PKG_TIMEOUT, expect_ptype=None):

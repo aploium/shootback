@@ -1,12 +1,51 @@
 #!/usr/bin/env python3
 # coding=utf-8
-from common_func import *
+import os
+import tempfile
 import queue
 import atexit
+from common_func import *
 
 _listening_sockets = []  # for close at exit
 __author__ = "Aploium <i@z.codes>"
 __website__ = "https://github.com/aploium/shootback"
+
+_DEFAULT_SSL_KEY = '''\
+-----BEGIN PRIVATE KEY-----
+MIICdQIBADANBgkqhkiG9w0BAQEFAASCAl8wggJbAgEAAoGBAMqPYWmoQJaHwu3/
+0Q5R8RFpOzFwys/5xgypGMbFmW0oSpiVMA0u+lakxb7Z46RU/Y/kV4XUjB9+uDcI
+FlU520jWJVZ9g09gMKaPyDjxdKueKl2KDfn7i4unBQwouqzipPWXv0L8RnHF1gzG
+XgN/Dh6+5ZoY53JvUZaFbQhjjtkjAgMBAAECgYB8WRjL6+X6gs0/ndOQnu0GaztT
+VpKqqgLSstvq6lMNl7ZzhOJCtZwopG5ggxIkR6iBNQQlvB1pGDmuTuCm4SWjsXsS
+x2iDvPTlx9Y1ke9SWszZ6mOvumeHLnnxU0tp+ECySphQN5XxzH2yHzeXVTWpIim6
+ADFrtbltaPFLghZbQQJBAOT0tU+QLtlaKit6iY1QrZntsVzeCZYxh2ktz4Hsk8RN
+K4U4FCoWz3rJrkj1gFIrgoSgQ6+VzjXzFDbKJeP7b38CQQDifIBhi9JAVKlPgklG
+e595EYa3J4a601AAIxYVVwyfn8CiUUHCHKM+roJywh0uvKVXN6sn1Wi4zU8H8BQ1
+9KhdAkAnIY/PfmQTb+6fKb1SssRI97AFoElhKyvqlRLPMOD8fvf+N9xyaR2i7c9k
+1tjMsnUHN+D5pI/u9pGw35HkSjf/AkB4rpCV6bQhtTr2c9zpoqvKDi2zYGtpF3oU
+aJ22x0ihsbUqiJO6hBn0J3a5AXgdVEXh4Hbh5dRETJnlB+ctDO29AkBXDgUXbltm
+CRtey5ZwnlAKI8jwx3q4jaldTCJrwThfgNdlvWPnKjPhIYG/OogLAm82grruSzOQ
+a2xDsGiXCZoM
+-----END PRIVATE KEY-----
+'''
+_DEFAULT_SSL_CERT = '''\
+-----BEGIN CERTIFICATE-----
+MIICmzCCAgSgAwIBAgIJANe4OK2h+u9iMA0GCSqGSIb3DQEBCwUAMGUxCzAJBgNV
+BAYTAlVTMRMwEQYDVQQIDApTb21lLVN0YXRlMS0wKwYDVQQKDCRodHRwczovL2dp
+dGh1Yi5jb20vYXBsb2l1bS9zaG9vdGJhY2sxEjAQBgNVBAMMCWxvY2FsaG9zdDAe
+Fw0xODEwMjQxNjA5MDVaFw0yODEwMjExNjA5MDVaMGUxCzAJBgNVBAYTAlVTMRMw
+EQYDVQQIDApTb21lLVN0YXRlMS0wKwYDVQQKDCRodHRwczovL2dpdGh1Yi5jb20v
+YXBsb2l1bS9zaG9vdGJhY2sxEjAQBgNVBAMMCWxvY2FsaG9zdDCBnzANBgkqhkiG
+9w0BAQEFAAOBjQAwgYkCgYEAyo9haahAlofC7f/RDlHxEWk7MXDKz/nGDKkYxsWZ
+bShKmJUwDS76VqTFvtnjpFT9j+RXhdSMH364NwgWVTnbSNYlVn2DT2Awpo/IOPF0
+q54qXYoN+fuLi6cFDCi6rOKk9Ze/QvxGccXWDMZeA38OHr7lmhjncm9RloVtCGOO
+2SMCAwEAAaNTMFEwHQYDVR0OBBYEFEJESWZQ80wg2+1HmLW8nFtYyg9NMB8GA1Ud
+IwQYMBaAFEJESWZQ80wg2+1HmLW8nFtYyg9NMA8GA1UdEwEB/wQFMAMBAf8wDQYJ
+KoZIhvcNAQELBQADgYEAJD3ZWeLJaxWyCVSsKSxFZfTyYMhKSI9UjssDU48ENbfz
+hTdU2KxHFmRlTIdl02BcvpjiCHOCYxGkSBXctpXAHp9oU8fpzNIdekmgmZD2GjHS
+NbE3PCsO3NNtnc3Oj96HCww2MeC0ro9j0uDkyl+0zx47UeFUDqqSFJZ3bQa8j0w=
+-----END CERTIFICATE-----
+'''
 
 
 @atexit.register
@@ -33,7 +72,9 @@ def try_bind_port(sock, addr):
 
 class Master(object):
     def __init__(self, customer_listen_addr, communicate_addr=None,
-                 slaver_pool=None, working_pool=None):
+                 slaver_pool=None, working_pool=None,
+                 ssl=False
+                 ):
         """
 
         :param customer_listen_addr: equals to the -c/--customer param
@@ -50,6 +91,13 @@ class Master(object):
         # a queue for customers who have connected to us,
         #   but not assigned a slaver yet
         self.pending_customers = queue.Queue()
+
+        if ssl:
+            self.ssl_context = self._make_ssl_context()
+            self.ssl_avail = self.ssl_context is not None
+        else:
+            self.ssl_avail = False
+            self.ssl_context = None
 
         self.communicate_addr = communicate_addr
 
@@ -103,6 +151,26 @@ class Master(object):
 
         while True:
             time.sleep(10)
+
+    def _make_ssl_context(self):
+        if ssl is None:
+            log.warning('ssl module is NOT valid in this machine! Fallback to plain')
+            return None
+
+        ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+        ctx.check_hostname = False
+        ctx.load_default_certs(ssl.Purpose.SERVER_AUTH)
+        ctx.verify_mode = ssl.VerifyMode.CERT_NONE
+
+        _certfile = tempfile.mktemp()
+        open(_certfile, 'w').write(_DEFAULT_SSL_CERT)
+        _keyfile = tempfile.mktemp()
+        open(_keyfile, 'w').write(_DEFAULT_SSL_KEY)
+        ctx.load_cert_chain(_certfile, _keyfile)
+        os.remove(_certfile)
+        os.remove(_keyfile)
+
+        return ctx
 
     def _transfer_complete(self, addr_customer):
         """a callback for SocketBridge, do some cleanup jobs"""
@@ -210,14 +278,13 @@ class Master(object):
                     fmt_addr(addr_slaver), time_used))
                 self.slaver_pool.append(slaver)
 
-    @staticmethod
-    def _handshake(conn_slaver):
+    def _handshake(self, conn_slaver):
         """
         handshake before real data transfer
         it ensures:
             1. client is alive and ready for transmission
             2. client is shootback_slaver, not mistakenly connected other program
-            3. verify the SECRET_KEY
+            3. verify the SECRET_KEY, establish SSL
             4. tell slaver it's time to connect target
 
         handshake procedure:
@@ -226,19 +293,33 @@ class Master(object):
             3. slaver hello --> master
             4. (immediately after 3) slaver connect to target
             4. master verify slaver
-            5. enter real data transfer
+            5. [optional] establish SSL
+            6. enter real data transfer
+
+        Args:
+            conn_slaver (socket.socket)
+        Return:
+            socket.socket|ssl.SSLSocket: socket obj(may be ssl-socket) if handshake success, else None
         """
-        conn_slaver.send(CtrlPkg.pbuild_hs_m2s().raw)
+        conn_slaver.send(CtrlPkg.pbuild_hs_m2s(ssl_avail=self.ssl_avail).raw)
 
         buff = select_recv(conn_slaver, CtrlPkg.PACKAGE_SIZE, 2)
         if buff is None:
-            return False
+            return None
 
-        pkg, verify = CtrlPkg.decode_verify(buff, CtrlPkg.PTYPE_HS_S2M)  # type: CtrlPkg,bool
+        pkg, correct = CtrlPkg.decode_verify(buff, CtrlPkg.PTYPE_HS_S2M)  # type: CtrlPkg,bool
 
-        log.debug("CtrlPkg from slaver {}: {}".format(conn_slaver.getpeername(), pkg))
+        if not correct:
+            return None
 
-        return verify
+        if not self.ssl_avail or pkg.data[1] == CtrlPkg.SSL_FLAG_NONE:
+            if self.ssl_avail:
+                log.warning('client %s does not support SSL, disabled!', conn_slaver.getpeername())
+            return conn_slaver
+        else:
+            ssl_conn_slaver = self.ssl_context.wrap_socket(conn_slaver, server_side=True)  # type: ssl.SSLSocket
+            log.debug('ssl established slaver: %s', ssl_conn_slaver.getpeername())
+            return ssl_conn_slaver
 
     def _get_an_active_slaver(self):
         """get and activate an slaver for data transfer"""
@@ -258,16 +339,17 @@ class Master(object):
             conn_slaver = dict_slaver["conn_slaver"]
 
             try:
-                hs = self._handshake(conn_slaver)
+                # this returned conn may be ssl-socket or plain socket
+                actual_conn = self._handshake(conn_slaver)
             except Exception as e:
-                log.warning("Handshake failed: {}".format(e))
+                log.warning("Handshake failed. %s %s", dict_slaver["addr_slaver"], e)
                 log.debug(traceback.format_exc())
-                hs = False
+                actual_conn = None
 
-            if hs:
-                return conn_slaver
+            if actual_conn is not None:
+                return actual_conn
             else:
-                log.warning("slaver handshake failed: {}".format(dict_slaver["addr_slaver"]))
+                log.warning("slaver handshake failed: %s", dict_slaver["addr_slaver"])
                 try_close(conn_slaver)
 
                 time.sleep(0.02)
@@ -280,13 +362,12 @@ class Master(object):
 
             conn_slaver = self._get_an_active_slaver()
             if conn_slaver is None:
-                log.warning("Closing customer[{}] because no available slaver found".format(
-                    addr_customer))
+                log.warning("Closing customer[%s] because no available slaver found", addr_customer)
                 try_close(conn_customer)
 
                 continue
             else:
-                log.debug("Using slaver: {} for {}".format(conn_slaver.getpeername(), addr_customer))
+                log.debug("Using slaver: %s for %s", conn_slaver.getpeername(), addr_customer)
 
             self.working_pool[addr_customer] = {
                 "addr_customer": addr_customer,
@@ -339,13 +420,13 @@ class Master(object):
             self.pending_customers.put((conn_customer, addr_customer))
 
 
-def run_master(communicate_addr, customer_listen_addr):
+def run_master(communicate_addr, customer_listen_addr, ssl=False):
     log.info("shootback {} running as master".format(version_info()))
     log.info("author: {}  site: {}".format(__author__, __website__))
     log.info("slaver from: {} customer from: {}".format(
         fmt_addr(communicate_addr), fmt_addr(customer_listen_addr)))
 
-    Master(customer_listen_addr, communicate_addr).serve_forever()
+    Master(customer_listen_addr, communicate_addr, ssl=ssl).serve_forever()
 
 
 def argparse_master():
@@ -390,6 +471,8 @@ Tips: ANY service using TCP is shootback-able.  HTTP/FTP/Proxy/SSH/VNC/...
                         help="standing-by slaver's TTL, default is 300. "
                              "In master side, this value affects heart-beat frequency. "
                              "Default value is optimized for most cases")
+    parser.add_argument('--ssl', action='store_true', help='[experimental] try using ssl for data encryption. '
+                                                           'It may be enabled by default in future version')
 
     return parser.parse_args()
 
@@ -420,7 +503,7 @@ def main_master():
             level = logging.INFO
         configure_logging(level)
 
-    run_master(communicate_addr, customer_listen_addr)
+    run_master(communicate_addr, customer_listen_addr, ssl=args.ssl)
 
 
 if __name__ == '__main__':

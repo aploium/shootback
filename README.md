@@ -22,6 +22,8 @@ slaver is __single file__ and only depends on python(2.7/3.4+) standard library.
    辅助CTF线下赛, 使场外选手也获得比赛网络环境
 5. Connect to device with dynamic IP, such as ADSL  
    连接动态IP的设备, 如ADSL
+6. SSL encryption between slaver and master  
+   slaver和master间支持SSL加密
 
 ## Getting started
 
@@ -46,16 +48,17 @@ slaver is __single file__ and only depends on python(2.7/3.4+) standard library.
     # -- some HTML content from example.com --
     # -- some HTML content from example.com --
     ```
-5. a more reality example:  
+5. a more reality example (with ssl):  
     assume your master is 22.33.44.55 (just like the graph above)
     ```bash
-    # slaver_local_ssh <---> slaver <--> master(22.33.44.55) <--> You
+    # slaver_local_ssh <---> slaver <--[SSL]--> master(22.33.44.55) <--> You
     
     # ---- master ----
-    python3 master.py -m 0.0.0.0:10000 -c 0.0.0.0:10022
+    python3 master.py -m 0.0.0.0:10000 -c 0.0.0.0:10022 --ssl
     
     # ---- slaver ----
-    python(or python3) slaver.py -m 22.33.44.55:10000 -t 127.0.0.1:22
+    # ps: the `--ssl` option is for slaver-master encryption, not for SSH
+    python(or python3) slaver.py -m 22.33.44.55:10000 -t 127.0.0.1:22 --ssl
     
     # ---- YOU ----
     ssh 22.33.44.55 -p 10022
