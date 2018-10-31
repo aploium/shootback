@@ -30,8 +30,8 @@ try:
 except:
     pass
 
-# socket recv buffer, 16384 bytes
-RECV_BUFFER_SIZE = 2 ** 14
+# socket recv buffer, 1024 bytes
+RECV_BUFFER_SIZE = 2 ** 10
 
 # default secretkey, use -k/--secretkey to change
 SECRET_KEY = "shootback"
