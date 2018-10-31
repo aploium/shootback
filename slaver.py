@@ -156,7 +156,7 @@ class Slaver(object):
 
         if not self.ssl_avail or handshake_pkg.data[1] == CtrlPkg.SSL_FLAG_NONE:
             if self.ssl_avail:
-                log.warning('master %s does not support SSL, disabled!', conn_slaver.getpeername())
+                log.warning('master %s does not enabled SSL, fallback to plain', conn_slaver.getpeername())
             return conn_slaver
         else:
             ssl_conn_slaver = self.ssl_context.wrap_socket(conn_slaver, server_side=False)  # type: ssl.SSLSocket

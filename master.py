@@ -314,7 +314,7 @@ class Master(object):
 
         if not self.ssl_avail or pkg.data[1] == CtrlPkg.SSL_FLAG_NONE:
             if self.ssl_avail:
-                log.warning('client %s does not support SSL, disabled!', conn_slaver.getpeername())
+                log.warning('client %s not enabled SSL, fallback to plain.', conn_slaver.getpeername())
             return conn_slaver
         else:
             ssl_conn_slaver = self.ssl_context.wrap_socket(conn_slaver, server_side=True)  # type: ssl.SSLSocket

@@ -45,10 +45,10 @@ SECRET_KEY = "shootback"
 SPARE_SLAVER_TTL = 300
 
 # internal program version, appears in CtrlPkg
-INTERNAL_VERSION = 0x000F
+INTERNAL_VERSION = 0x0010
 
 # version for human readable
-__version__ = (2, 4, 0, INTERNAL_VERSION)
+__version__ = (2, 4, 1, INTERNAL_VERSION)
 
 # just a logger
 log = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ def try_close(closable):
 
 def select_recv(conn, buff_size, timeout=None):
     """add timeout for socket.recv()
-    :type conn: socket.SocketType
+    :type conn: socket.socket
     :type buff_size: int
     :type timeout: float
     :rtype: Union[bytes, None]
@@ -143,11 +143,16 @@ class SocketBridge(object):
         """
         transfer anything between two sockets
 
-        :type conn1: socket.SocketType
-        :type conn2: socket.SocketType
+        :type conn1: socket.socket
+        :type conn2: socket.socket
         :param callback: callback in connection finish
         :type callback: Callable
         """
+        # change to non-blocking
+        #   we use select or epoll to notice when data is ready
+        conn1.setblocking(False)
+        conn2.setblocking(False)
+
         # mark as readable
         self.conn_rd.add(conn1)
         self.conn_rd.add(conn2)
@@ -228,7 +233,7 @@ class SocketBridge(object):
 
     def _rd_shutdown(self, conn, once=False):
         """action when connection should be read-shutdown
-        :type conn: socket.SocketType
+        :type conn: socket.socket
         """
         if conn in self.conn_rd:
             self.conn_rd.remove(conn)
@@ -253,7 +258,7 @@ class SocketBridge(object):
 
     def _wr_shutdown(self, conn, once=False):
         """action when connection should be write-shutdown
-        :type conn: socket.SocketType
+        :type conn: socket.socket
         """
         try:
             conn.shutdown(socket.SHUT_WR)
@@ -267,7 +272,7 @@ class SocketBridge(object):
 
     def _terminate(self, conn):
         """terminate a sockets pair (two socket)
-        :type conn: socket.SocketType
+        :type conn: socket.socket
         :param conn: any one of the sockets pair
         """
         try_close(conn)  # close the first socket
@@ -528,7 +533,7 @@ class CtrlPkg(object):
     def recv(cls, sock, timeout=CTRL_PKG_TIMEOUT, expect_ptype=None):
         """just a shortcut function
         :param sock: which socket to recv CtrlPkg from
-        :type sock: socket.SocketType
+        :type sock: socket.socket
         :rtype: CtrlPkg,bool
         """
         buff = select_recv(sock, cls.PACKAGE_SIZE, timeout)
