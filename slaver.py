@@ -218,13 +218,18 @@ class Slaver(object):
         # ----------- all preparation finished -----------
         # pass two sockets to SocketBridge, and let it do the
         #   real data exchange task
-        self.socket_bridge.add_conn_pair(
-            actual_conn, conn_target,
-            functools.partial(
-                # 这个回调用来在传输完成后删除工作池中对应记录
-                self._transfer_complete, addr_slaver
+        try:
+            self.socket_bridge.add_conn_pair(
+                actual_conn, conn_target,
+                functools.partial(
+                    # 这个回调用来在传输完成后删除工作池中对应记录
+                    self._transfer_complete, addr_slaver
+                )
             )
-        )
+        except:
+            log.error('error adding to socket_bridge', exc_info=True)
+            try_close(actual_conn)
+            try_close(conn_target)
 
         # this slaver thread exits here
         return

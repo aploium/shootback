@@ -360,7 +360,11 @@ class Master(object):
             # get a newly connected customer
             conn_customer, addr_customer = self.pending_customers.get()
 
-            conn_slaver = self._get_an_active_slaver()
+            try:
+                conn_slaver = self._get_an_active_slaver()
+            except:
+                log.error('error in getting slaver', exc_info=True)
+                continue
             if conn_slaver is None:
                 log.warning("Closing customer[%s] because no available slaver found", addr_customer)
                 try_close(conn_customer)
@@ -378,10 +382,9 @@ class Master(object):
             try:
                 self._serve_customer(conn_customer, conn_slaver)
             except:
-                try:
-                    try_close(conn_customer)
-                except:
-                    pass
+                log.error('error adding to socket_bridge', exc_info=True)
+                try_close(conn_customer)
+                try_close(conn_slaver)
                 continue
 
     def _listen_slaver(self):
