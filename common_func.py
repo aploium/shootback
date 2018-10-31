@@ -227,6 +227,12 @@ class SocketBridge(object):
                     # send data, we use `buff[:rec_len]` slice because
                     #   only the front of buff is filled
                     self.map[s].send(buff[:rec_len])
+                except socket.error as e:
+                    if e.args[0] == 11:  # BlockingIOError
+                        log.warning('blocking IO error!', exc_info=True)
+                    log.warning('error sending socket %s, %s closing', repr(e), s)
+                    self._rd_shutdown(s)
+                    continue
                 except Exception as e:
                     # unable to send, close connection
                     log.warning('error sending socket %s, %s closing', repr(e), s)
