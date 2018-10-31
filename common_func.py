@@ -212,8 +212,9 @@ class SocketBridge(object):
                     #   to avoid many unnecessary malloc()
                     # see https://docs.python.org/3/library/socket.html#socket.socket.recv_into
                     rec_len = s.recv_into(buff, RECV_BUFFER_SIZE)
-                except:
+                except Exception as e:
                     # unable to read, in most cases, it's due to socket close
+                    log.warning('error reading socket %s, %s closing', repr(e), s)
                     self._rd_shutdown(s)
                     continue
 
@@ -226,8 +227,9 @@ class SocketBridge(object):
                     # send data, we use `buff[:rec_len]` slice because
                     #   only the front of buff is filled
                     self.map[s].send(buff[:rec_len])
-                except:
+                except Exception as e:
                     # unable to send, close connection
+                    log.warning('error sending socket %s, %s closing', repr(e), s)
                     self._rd_shutdown(s)
                     continue
 
