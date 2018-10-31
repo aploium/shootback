@@ -133,6 +133,7 @@ class SocketBridge(object):
         self.conn_rd = set()  # record readable-sockets
         self.map = {}  # record sockets pairs
         self.callbacks = {}  # record callbacks
+        self.send_buff = {}  # buff one packet for those sending too-fast socket
 
         if selectors:
             self.sel = selectors.DefaultSelector()
@@ -200,23 +201,34 @@ class SocketBridge(object):
             #   are also regarded as read-ready by select()
             if selectors:
                 events = self.sel.select(0.5)
-                socks = (key.fileobj for key, mask in events)
+                socks = list(key.fileobj for key, mask in events)
             else:
                 r, w, e = select.select(self.conn_rd, [], [], 0.5)
-                socks = r
+                socks = list(r)
+
+            # add those socket with sending buff (if we have)
+            socks.extend(self.send_buff.keys())
 
             for s in socks:  # iter every read-ready or closed sockets
-                try:
-                    # here, we use .recv_into() instead of .recv()
-                    #   recv data directly into the pre-allocated buffer
-                    #   to avoid many unnecessary malloc()
-                    # see https://docs.python.org/3/library/socket.html#socket.socket.recv_into
-                    rec_len = s.recv_into(buff, RECV_BUFFER_SIZE)
-                except Exception as e:
-                    # unable to read, in most cases, it's due to socket close
-                    log.warning('error reading socket %s, %s closing', repr(e), s)
-                    self._rd_shutdown(s)
-                    continue
+                if s in self.send_buff:
+                    # if this socket has non-sent data, send them first
+                    #   and meanwhile, stop recving more, to prevent buff blowing up.
+                    _prev_data = self.send_buff.pop(s)
+                    rec_len = len(_prev_data)
+                    buff[:rec_len] = _prev_data
+
+                else:  # no buff,do normal recv
+                    try:
+                        # here, we use .recv_into() instead of .recv()
+                        #   recv data directly into the pre-allocated buffer
+                        #   to avoid many unnecessary malloc()
+                        # see https://docs.python.org/3/library/socket.html#socket.socket.recv_into
+                        rec_len = s.recv_into(buff, RECV_BUFFER_SIZE)
+                    except Exception as e:
+                        # unable to read, in most cases, it's due to socket close
+                        log.warning('error reading socket %s, %s closing', repr(e), s)
+                        self._rd_shutdown(s)
+                        continue
 
                 if not rec_len:
                     # read zero size, closed or shutdowned socket
@@ -228,8 +240,11 @@ class SocketBridge(object):
                     #   only the front of buff is filled
                     self.map[s].send(buff[:rec_len])
                 except socket.error as e:
-                    if e.args[0] == 11:  # BlockingIOError
-                        log.warning('blocking IO error!', exc_info=True)
+                    if e.args[0] == 11:
+                        log.warning('another receives too slow, temporary cached. %s', e)
+                        self.send_buff[s] = bytes(buff[:rec_len])
+                        continue
+
                     log.warning('error sending socket %s, %s closing', repr(e), s)
                     self._rd_shutdown(s)
                     continue
@@ -247,6 +262,9 @@ class SocketBridge(object):
             self.conn_rd.remove(conn)
             if selectors:
                 self.sel.unregister(conn)
+
+        if conn in self.send_buff:
+            del self.send_buff[conn]
 
         try:
             conn.shutdown(socket.SHUT_RD)
