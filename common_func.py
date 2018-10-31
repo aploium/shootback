@@ -238,7 +238,7 @@ class SocketBridge(object):
                 try:
                     # send data, we use `buff[:rec_len]` slice because
                     #   only the front of buff is filled
-                    self.map[s].send(buff[:rec_len])
+                    self.map[s].sendall(buff[:rec_len])
                 except socket.error as e:
                     if e.args[0] == 11:
                         log.warning('another receives too slow, temporary cached. %s', e)
