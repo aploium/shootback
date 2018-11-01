@@ -158,8 +158,8 @@ class SocketBridge(object):
         """
         # change to non-blocking
         #   we use select or epoll to notice when data is ready
-        conn1.setblocking(True)
-        conn2.setblocking(True)
+        conn1.setblocking(False)
+        conn2.setblocking(False)
 
         # mark as readable+writable
         self.conn_rd.add(conn1)
