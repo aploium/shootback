@@ -14,6 +14,9 @@ import traceback
 
 try:
     import selectors
+    from selectors import EVENT_READ, EVENT_WRITE
+
+    EVENT_READ_WRITE = EVENT_READ | EVENT_WRITE
 except ImportError:
     import select
 
@@ -46,6 +49,9 @@ SPARE_SLAVER_TTL = 300
 
 # internal program version, appears in CtrlPkg
 INTERNAL_VERSION = 0x0010
+
+# # how many packet are buffed, before delaying recv
+# SOCKET_BRIDGE_SEND_BUFF_SIZE = 5
 
 # version for human readable
 __version__ = (2, 4, 1, INTERNAL_VERSION)
@@ -108,7 +114,7 @@ def select_recv(conn, buff_size, timeout=None):
     """
     if selectors:
         sel = selectors.DefaultSelector()
-        sel.register(conn, selectors.EVENT_READ)
+        sel.register(conn, EVENT_READ)
         events = sel.select(timeout)
         sel.close()
         if not events:
@@ -131,6 +137,7 @@ class SocketBridge(object):
 
     def __init__(self):
         self.conn_rd = set()  # record readable-sockets
+        self.conn_wr = set()  # record writeable-sockets
         self.map = {}  # record sockets pairs
         self.callbacks = {}  # record callbacks
         self.send_buff = {}  # buff one packet for those sending too-fast socket
@@ -151,12 +158,14 @@ class SocketBridge(object):
         """
         # change to non-blocking
         #   we use select or epoll to notice when data is ready
-        conn1.setblocking(False)
-        conn2.setblocking(False)
+        conn1.setblocking(True)
+        conn2.setblocking(True)
 
-        # mark as readable
+        # mark as readable+writable
         self.conn_rd.add(conn1)
+        self.conn_wr.add(conn1)
         self.conn_rd.add(conn2)
+        self.conn_wr.add(conn2)
 
         # record sockets pairs
         self.map[conn1] = conn2
@@ -167,8 +176,8 @@ class SocketBridge(object):
             self.callbacks[conn1] = callback
 
         if selectors:
-            self.sel.register(conn1, selectors.EVENT_READ)
-            self.sel.register(conn2, selectors.EVENT_READ)
+            self.sel.register(conn1, EVENT_READ_WRITE)
+            self.sel.register(conn2, EVENT_READ_WRITE)
 
     def start_as_daemon(self):
         t = threading.Thread(target=self.start)
@@ -189,9 +198,9 @@ class SocketBridge(object):
     def _start(self):
         # memoryview act as an recv buffer
         # refer https://docs.python.org/3/library/stdtypes.html#memoryview
-        buff = memoryview(bytearray(RECV_BUFFER_SIZE))
+
         while True:
-            if not self.conn_rd:
+            if not self.conn_rd and not self.conn_wr:
                 # sleep if there is no connections
                 time.sleep(0.06)
                 continue
@@ -201,58 +210,87 @@ class SocketBridge(object):
             #   are also regarded as read-ready by select()
             if selectors:
                 events = self.sel.select(0.5)
-                socks = list(key.fileobj for key, mask in events)
+                socks_rd = list(key.fileobj for key, mask in events if mask == EVENT_READ)
+                socks_wr = list(key.fileobj for key, mask in events if mask == EVENT_WRITE)
             else:
-                r, w, e = select.select(self.conn_rd, [], [], 0.5)
-                socks = list(r)
+                r, w, e = select.select(self.conn_rd, self.conn_wr, [], 0.5)
+                socks_rd = list(r)
+                socks_wr = list(e)
 
-            # add those socket with sending buff (if we have)
-            socks.extend(self.send_buff.keys())
-
-            for s in socks:  # iter every read-ready or closed sockets
+            # ----------------- RECEIVING ----------------
+            for s in socks_rd:  # type: socket.socket
+                # if this socket has non-sent data, stop recving more, to prevent buff blowing up.
                 if s in self.send_buff:
-                    # if this socket has non-sent data, send them first
-                    #   and meanwhile, stop recving more, to prevent buff blowing up.
-                    _prev_data = self.send_buff.pop(s)
-                    rec_len = len(_prev_data)
-                    buff[:rec_len] = _prev_data
-
-                else:  # no buff,do normal recv
-                    try:
-                        # here, we use .recv_into() instead of .recv()
-                        #   recv data directly into the pre-allocated buffer
-                        #   to avoid many unnecessary malloc()
-                        # see https://docs.python.org/3/library/socket.html#socket.socket.recv_into
-                        rec_len = s.recv_into(buff, RECV_BUFFER_SIZE)
-                    except Exception as e:
-                        # unable to read, in most cases, it's due to socket close
-                        log.warning('error reading socket %s, %s closing', repr(e), s)
-                        self._rd_shutdown(s)
-                        continue
-
-                if not rec_len:
-                    # read zero size, closed or shutdowned socket
-                    self._rd_shutdown(s)
+                    # if self.map[s] not in self.conn_wr:
+                    #     self._rd_shutdown(s)
+                    #     log.warning('shutdown read side because pair socket closed')
+                    #     continue
+                    log.warning('delay recv because another too slow')
                     continue
 
                 try:
-                    # send data, we use `buff[:rec_len]` slice because
-                    #   only the front of buff is filled
-                    self.map[s].sendall(buff[:rec_len])
-                except socket.error as e:
-                    if e.args[0] == 11:
-                        log.warning('another receives too slow, temporary cached. %s', e)
-                        self.send_buff[s] = bytes(buff[:rec_len])
-                        continue
-
-                    log.warning('error sending socket %s, %s closing', repr(e), s)
+                    # here, we use .recv_into() instead of .recv()
+                    #   recv data directly into the pre-allocated buffer
+                    #   to avoid many unnecessary malloc()
+                    # see https://docs.python.org/3/library/socket.html#socket.socket.recv_into
+                    # rec_len = s.recv_into(buff, RECV_BUFFER_SIZE)
+                    received = s.recv(RECV_BUFFER_SIZE)
+                except Exception as e:
+                    # unable to read, in most cases, it's due to socket close
+                    log.warning('error reading socket %s, %s closing', repr(e), s)
                     self._rd_shutdown(s)
                     continue
+
+                if not received:
+                    # read zero size, closed or shutdowned socket
+                    self._rd_shutdown(s)
+                    continue
+                else:
+                    self.send_buff[s] = received
+                # if self.map[s] not in socks_wr:
+                #     log.warning('another receives too slow, temporary buffed')
+                #     self.send_buff[s] = bytes(buff[:rec_len])
+                #     continue
+
+            # ----------------- SENDING ----------------
+            for s in socks_wr:
+                if self.map[s] not in self.send_buff:
+                    if s not in self.conn_rd:
+                        self._wr_shutdown(s)
+                    continue
+                try:
+                    # send data, we use `buff[:rec_len]` slice because
+                    #   only the front of buff is filled
+                    data = self.send_buff.pop(self.map[s])
+                    self.map[s].send(data)
+                # except socket.error as e:
+                #     if e.args[0] == 11:
+                #         log.warning('another receives too slow, temporary cached. %s', e)
+                #         self.send_buff[s] = bytes(buff[:rec_len])
+                #         self.conn_wr.add(self.map[s])
+                #         if selectors:
+                #             self.sel.register(self.map[s], EVENT_WRITE)
+                #         continue
+                #
+                #     log.warning('error sending socket %s, %s closing', repr(e), s)
+                #     self._rd_shutdown(s)
+                #     continue
                 except Exception as e:
                     # unable to send, close connection
                     log.warning('error sending socket %s, %s closing', repr(e), s)
-                    self._rd_shutdown(s)
+                    self._wr_shutdown(s)
                     continue
+
+    def _sel_disable_event(self, conn, ev):
+        try:
+            _key = self.sel.get_key(conn)  # type:selectors.SelectorKey
+        except KeyError:
+            pass
+        else:
+            if _key.events == EVENT_READ_WRITE:
+                self.sel.modify(conn, EVENT_READ_WRITE ^ ev)
+            else:
+                self.sel.unregister(conn)
 
     def _rd_shutdown(self, conn, once=False):
         """action when connection should be read-shutdown
@@ -261,10 +299,10 @@ class SocketBridge(object):
         if conn in self.conn_rd:
             self.conn_rd.remove(conn)
             if selectors:
-                self.sel.unregister(conn)
+                self._sel_disable_event(conn, EVENT_READ)
 
-        if conn in self.send_buff:
-            del self.send_buff[conn]
+        # if conn in self.send_buff:
+        #     del self.send_buff[conn]
 
         try:
             conn.shutdown(socket.SHUT_RD)
@@ -291,6 +329,11 @@ class SocketBridge(object):
         except:
             pass
 
+        if conn in self.conn_wr:
+            self.conn_wr.remove(conn)
+            if selectors:
+                self._sel_disable_event(conn, EVENT_WRITE)
+
         if not once and conn in self.map:  # use the `once` param to avoid infinite loop
             #   pair should be rd_shutdown.
             # if a socket is wr_shutdowned, then it's
@@ -313,6 +356,12 @@ class SocketBridge(object):
             del self.map[conn]  # clean the first socket
         else:
             _mapped_conn = None  # just a fallback
+        self.send_buff.pop(conn, None)
+        if selectors:
+            try:
+                self.sel.unregister(conn)
+            except:
+                pass
 
         # ------ callback --------
         # because we are not sure which socket are assigned to callback,
