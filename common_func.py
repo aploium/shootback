@@ -11,6 +11,7 @@ import socket
 import functools
 import threading
 import traceback
+import warnings
 
 try:
     import selectors
@@ -20,12 +21,14 @@ try:
 except ImportError:
     import select
 
+    warnings.warn('selectors module not available, fallback to select')
     selectors = None
 
 try:
     import ssl
 except ImportError:
     ssl = None
+    warnings.warn('ssl module not available, ssl feature is disabled')
 
 try:
     # for pycharm type hinting
@@ -33,8 +36,8 @@ try:
 except:
     pass
 
-# socket recv buffer, 1024 bytes
-RECV_BUFFER_SIZE = 2 ** 10
+# socket recv buffer, 16384 bytes
+RECV_BUFFER_SIZE = 2 ** 14
 
 # default secretkey, use -k/--secretkey to change
 SECRET_KEY = "shootback"
@@ -175,7 +178,7 @@ class SocketBridge(object):
         if callback is not None:
             self.callbacks[conn1] = callback
 
-        if selectors:
+        if self.sel:
             self.sel.register(conn1, EVENT_READ_WRITE)
             self.sel.register(conn2, EVENT_READ_WRITE)
 
@@ -196,9 +199,8 @@ class SocketBridge(object):
                 ))
 
     def _start(self):
-        # memoryview act as an recv buffer
-        # refer https://docs.python.org/3/library/stdtypes.html#memoryview
 
+        _last_wr_count = 0
         while True:
             if not self.conn_rd and not self.conn_wr:
                 # sleep if there is no connections
@@ -208,74 +210,64 @@ class SocketBridge(object):
             # blocks until there is socket(s) ready for .recv
             # notice: sockets which were closed by remote,
             #   are also regarded as read-ready by select()
-            if selectors:
+            if self.sel:
                 events = self.sel.select(0.5)
-                socks_rd = list(key.fileobj for key, mask in events if mask == EVENT_READ)
-                socks_wr = list(key.fileobj for key, mask in events if mask == EVENT_WRITE)
+                socks_rd = tuple(key.fileobj for key, mask in events if mask & EVENT_READ)
+                socks_wr = tuple(key.fileobj for key, mask in events if mask & EVENT_WRITE)
             else:
                 r, w, e = select.select(self.conn_rd, self.conn_wr, [], 0.5)
-                socks_rd = list(r)
-                socks_wr = list(e)
+                socks_rd = tuple(r)
+                socks_wr = tuple(e)
+
+            if not socks_rd and not self.send_buff:  # reduce CPU in low traffic
+                time.sleep(0.01)
+            # log.debug('got rd:%s wr:%s', socks_rd, socks_wr)
 
             # ----------------- RECEIVING ----------------
             for s in socks_rd:  # type: socket.socket
                 # if this socket has non-sent data, stop recving more, to prevent buff blowing up.
-                if s in self.send_buff:
-                    # if self.map[s] not in self.conn_wr:
-                    #     self._rd_shutdown(s)
-                    #     log.warning('shutdown read side because pair socket closed')
-                    #     continue
-                    log.warning('delay recv because another too slow')
+                if self.map[s] in self.send_buff:
+                    log.debug('delay recv because another too slow %s', self.map.get(s))
                     continue
 
                 try:
-                    # here, we use .recv_into() instead of .recv()
-                    #   recv data directly into the pre-allocated buffer
-                    #   to avoid many unnecessary malloc()
-                    # see https://docs.python.org/3/library/socket.html#socket.socket.recv_into
-                    # rec_len = s.recv_into(buff, RECV_BUFFER_SIZE)
                     received = s.recv(RECV_BUFFER_SIZE)
+                    # log.debug('recved %s from %s', len(received), s)
                 except Exception as e:
+                    # ssl may raise SSLWantReadError or SSLWantWriteError
+                    #   just continue and wait it complete
+                    if ssl and isinstance(e, (ssl.SSLWantReadError, ssl.SSLWantWriteError)):
+                        # log.warning('got %s, wait to read then', repr(e))
+                        continue
+
                     # unable to read, in most cases, it's due to socket close
                     log.warning('error reading socket %s, %s closing', repr(e), s)
                     self._rd_shutdown(s)
                     continue
 
                 if not received:
-                    # read zero size, closed or shutdowned socket
                     self._rd_shutdown(s)
                     continue
                 else:
-                    self.send_buff[s] = received
-                # if self.map[s] not in socks_wr:
-                #     log.warning('another receives too slow, temporary buffed')
-                #     self.send_buff[s] = bytes(buff[:rec_len])
-                #     continue
+                    self.send_buff[self.map[s]] = received
 
             # ----------------- SENDING ----------------
+            _last_wr_count = 0
             for s in socks_wr:
-                if self.map[s] not in self.send_buff:
-                    if s not in self.conn_rd:
+                if s not in self.send_buff:
+                    if self.map.get(s) not in self.conn_rd:
                         self._wr_shutdown(s)
                     continue
+                _last_wr_count += 1
+                data = self.send_buff.pop(s)
                 try:
-                    # send data, we use `buff[:rec_len]` slice because
-                    #   only the front of buff is filled
-                    data = self.send_buff.pop(self.map[s])
-                    self.map[s].send(data)
-                # except socket.error as e:
-                #     if e.args[0] == 11:
-                #         log.warning('another receives too slow, temporary cached. %s', e)
-                #         self.send_buff[s] = bytes(buff[:rec_len])
-                #         self.conn_wr.add(self.map[s])
-                #         if selectors:
-                #             self.sel.register(self.map[s], EVENT_WRITE)
-                #         continue
-                #
-                #     log.warning('error sending socket %s, %s closing', repr(e), s)
-                #     self._rd_shutdown(s)
-                #     continue
+                    s.send(data)
+                    # log.debug('sent %s to %s', len(data), s)
                 except Exception as e:
+                    if ssl and isinstance(e, (ssl.SSLWantReadError, ssl.SSLWantWriteError)):
+                        # log.warning('got %s, wait to write then', repr(e))
+                        self.send_buff[s] = data  # write back for next write
+                        continue
                     # unable to send, close connection
                     log.warning('error sending socket %s, %s closing', repr(e), s)
                     self._wr_shutdown(s)
@@ -298,7 +290,7 @@ class SocketBridge(object):
         """
         if conn in self.conn_rd:
             self.conn_rd.remove(conn)
-            if selectors:
+            if self.sel:
                 self._sel_disable_event(conn, EVENT_READ)
 
         # if conn in self.send_buff:
@@ -331,7 +323,7 @@ class SocketBridge(object):
 
         if conn in self.conn_wr:
             self.conn_wr.remove(conn)
-            if selectors:
+            if self.sel:
                 self._sel_disable_event(conn, EVENT_WRITE)
 
         if not once and conn in self.map:  # use the `once` param to avoid infinite loop
@@ -339,7 +331,7 @@ class SocketBridge(object):
             # if a socket is wr_shutdowned, then it's
             self._rd_shutdown(self.map[conn], True)
 
-    def _terminate(self, conn):
+    def _terminate(self, conn, once=False):
         """terminate a sockets pair (two socket)
         :type conn: socket.socket
         :param conn: any one of the sockets pair
@@ -347,17 +339,10 @@ class SocketBridge(object):
         try_close(conn)  # close the first socket
 
         # ------ close and clean the mapped socket, if exist ------
-        if conn in self.map:
-            _mapped_conn = self.map[conn]
-            try_close(_mapped_conn)
-            if _mapped_conn in self.map:
-                del self.map[_mapped_conn]
+        _another_conn = self.map.pop(conn, None)
 
-            del self.map[conn]  # clean the first socket
-        else:
-            _mapped_conn = None  # just a fallback
         self.send_buff.pop(conn, None)
-        if selectors:
+        if self.sel:
             try:
                 self.sel.unregister(conn)
             except:
@@ -373,13 +358,10 @@ class SocketBridge(object):
                 log.error("traceback error: {}".format(e))
                 log.debug(traceback.format_exc())
             del self.callbacks[conn]
-        elif _mapped_conn and _mapped_conn in self.callbacks:
-            try:
-                self.callbacks[_mapped_conn]()
-            except Exception as e:
-                log.error("traceback error: {}".format(e))
-                log.debug(traceback.format_exc())
-            del self.callbacks[_mapped_conn]
+
+        # terminate another
+        if not once and _another_conn in self.map:
+            self._terminate(_another_conn)
 
 
 class CtrlPkg(object):
