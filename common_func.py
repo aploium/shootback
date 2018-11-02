@@ -200,7 +200,6 @@ class SocketBridge(object):
 
     def _start(self):
 
-        _last_wr_count = 0
         while True:
             if not self.conn_rd and not self.conn_wr:
                 # sleep if there is no connections
@@ -215,9 +214,10 @@ class SocketBridge(object):
                 socks_rd = tuple(key.fileobj for key, mask in events if mask & EVENT_READ)
                 socks_wr = tuple(key.fileobj for key, mask in events if mask & EVENT_WRITE)
             else:
-                r, w, e = select.select(self.conn_rd, self.conn_wr, [], 0.5)
+                r, w, _ = select.select(self.conn_rd, self.conn_wr, [], 0.5)
                 socks_rd = tuple(r)
-                socks_wr = tuple(e)
+                socks_wr = tuple(w)
+                # log.debug('socks_rd: %s, socks_wr:%s', len(socks_rd), len(socks_wr))
 
             if not socks_rd and not self.send_buff:  # reduce CPU in low traffic
                 time.sleep(0.01)
@@ -227,7 +227,7 @@ class SocketBridge(object):
             for s in socks_rd:  # type: socket.socket
                 # if this socket has non-sent data, stop recving more, to prevent buff blowing up.
                 if self.map[s] in self.send_buff:
-                    log.debug('delay recv because another too slow %s', self.map.get(s))
+                    # log.debug('delay recv because another too slow %s', self.map.get(s))
                     continue
 
                 try:
@@ -252,13 +252,11 @@ class SocketBridge(object):
                     self.send_buff[self.map[s]] = received
 
             # ----------------- SENDING ----------------
-            _last_wr_count = 0
             for s in socks_wr:
                 if s not in self.send_buff:
                     if self.map.get(s) not in self.conn_rd:
                         self._wr_shutdown(s)
                     continue
-                _last_wr_count += 1
                 data = self.send_buff.pop(s)
                 try:
                     s.send(data)
