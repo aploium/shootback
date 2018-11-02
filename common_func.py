@@ -51,13 +51,13 @@ SECRET_KEY = "shootback"
 SPARE_SLAVER_TTL = 300
 
 # internal program version, appears in CtrlPkg
-INTERNAL_VERSION = 0x0010
+INTERNAL_VERSION = 0x0011
 
 # # how many packet are buffed, before delaying recv
 # SOCKET_BRIDGE_SEND_BUFF_SIZE = 5
 
 # version for human readable
-__version__ = (2, 4, 1, INTERNAL_VERSION)
+__version__ = (2, 5, 0, INTERNAL_VERSION)
 
 # just a logger
 log = logging.getLogger(__name__)
