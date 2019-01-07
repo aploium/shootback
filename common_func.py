@@ -40,7 +40,7 @@ except:
 RECV_BUFFER_SIZE = 2 ** 14
 
 # default secretkey, use -k/--secretkey to change
-SECRET_KEY = "shootback"
+SECRET_KEY = None  # "shootback"
 
 # how long a SPARE slaver would keep
 # once slaver received an heart-beat package from master,
@@ -51,13 +51,13 @@ SECRET_KEY = "shootback"
 SPARE_SLAVER_TTL = 300
 
 # internal program version, appears in CtrlPkg
-INTERNAL_VERSION = 0x0011
+INTERNAL_VERSION = 0x0012
 
 # # how many packet are buffed, before delaying recv
 # SOCKET_BRIDGE_SEND_BUFF_SIZE = 5
 
 # version for human readable
-__version__ = (2, 5, 0, INTERNAL_VERSION)
+__version__ = (2, 6, 0, INTERNAL_VERSION)
 
 # just a logger
 log = logging.getLogger(__name__)
@@ -131,6 +131,12 @@ def select_recv(conn, buff_size, timeout=None):
         raise RuntimeError("received zero bytes, socket was closed")
 
     return buff
+
+
+def set_secretkey(key):
+    global SECRET_KEY
+    SECRET_KEY = key
+    CtrlPkg.recalc_crc32()
 
 
 class SocketBridge(object):
@@ -414,8 +420,9 @@ class CtrlPkg(object):
     CTRL_PKG_TIMEOUT = 5  # CtrlPkg recv timeout, in second
 
     # CRC32 for SECRET_KEY and Reversed(SECRET_KEY)
-    SECRET_KEY_CRC32 = binascii.crc32(SECRET_KEY.encode('utf-8')) & 0xffffffff
-    SECRET_KEY_REVERSED_CRC32 = binascii.crc32(SECRET_KEY[::-1].encode('utf-8')) & 0xffffffff
+    #   these values are set by `set_secretkey`
+    SECRET_KEY_CRC32 = None  # binascii.crc32(SECRET_KEY.encode('utf-8')) & 0xffffffff
+    SECRET_KEY_REVERSED_CRC32 = None  # binascii.crc32(SECRET_KEY[::-1].encode('utf-8')) & 0xffffffff
 
     # Package Type
     PTYPE_HS_S2M = -1  # handshake pkg, slaver to master

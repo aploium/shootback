@@ -355,7 +355,6 @@ Tips: ANY service using TCP is shootback-able.  HTTP/FTP/Proxy/SSH/VNC/...
 
 def main_slaver():
     global SPARE_SLAVER_TTL
-    global SECRET_KEY
 
     args = argparse_slaver()
 
@@ -366,8 +365,7 @@ def main_slaver():
     communicate_addr = split_host(args.master)
     target_addr = split_host(args.target)
 
-    SECRET_KEY = args.secretkey
-    CtrlPkg.recalc_crc32()
+    set_secretkey(args.secretkey)
 
     SPARE_SLAVER_TTL = args.SPARE_SLAVER_TTL
     max_spare_count = args.max_spare_count

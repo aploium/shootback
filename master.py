@@ -325,16 +325,16 @@ class Master(object):
         """get and activate an slaver for data transfer"""
         try_count = 100
         while True:
+            if not try_count:
+                return None
             try:
                 dict_slaver = self.slaver_pool.popleft()
             except:
-                if try_count:
-                    time.sleep(0.02)
-                    try_count -= 1
-                    if try_count % 10 == 0:
-                        log.error("!!NO SLAVER AVAILABLE!!  trying {}".format(try_count))
-                    continue
-                return None
+                time.sleep(0.02)
+                try_count -= 1
+                if try_count % 10 == 0:
+                    log.error("!!NO SLAVER AVAILABLE!!  trying {}".format(try_count))
+                continue
 
             conn_slaver = dict_slaver["conn_slaver"]
 
@@ -345,6 +345,10 @@ class Master(object):
                 log.warning("Handshake failed. %s %s", dict_slaver["addr_slaver"], e)
                 log.debug(traceback.format_exc())
                 actual_conn = None
+
+                try_count -= 1
+                if try_count % 10 == 0:
+                    log.error("!!NO SLAVER AVAILABLE!!  trying {}".format(try_count))
 
             if actual_conn is not None:
                 return actual_conn
@@ -482,7 +486,6 @@ Tips: ANY service using TCP is shootback-able.  HTTP/FTP/Proxy/SSH/VNC/...
 
 def main_master():
     global SPARE_SLAVER_TTL
-    global SECRET_KEY
 
     args = argparse_master()
 
@@ -493,8 +496,7 @@ def main_master():
     communicate_addr = split_host(args.master)
     customer_listen_addr = split_host(args.customer)
 
-    SECRET_KEY = args.secretkey
-    CtrlPkg.recalc_crc32()
+    set_secretkey(args.secretkey)
 
     SPARE_SLAVER_TTL = args.SPARE_SLAVER_TTL
     if args.quiet < 2:
