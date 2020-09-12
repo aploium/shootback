@@ -51,13 +51,13 @@ SECRET_KEY = None  # "shootback"
 SPARE_SLAVER_TTL = 300
 
 # internal program version, appears in CtrlPkg
-INTERNAL_VERSION = 0x0012
+INTERNAL_VERSION = 0x0013
 
 # # how many packet are buffed, before delaying recv
 # SOCKET_BRIDGE_SEND_BUFF_SIZE = 5
 
 # version for human readable
-__version__ = (2, 6, 0, INTERNAL_VERSION)
+__version__ = (2, 6, 1, INTERNAL_VERSION)
 
 # just a logger
 log = logging.getLogger(__name__)
@@ -209,7 +209,7 @@ class SocketBridge(object):
         while True:
             if not self.conn_rd and not self.conn_wr:
                 # sleep if there is no connections
-                time.sleep(0.06)
+                time.sleep(0.01)
                 continue
 
             # blocks until there is socket(s) ready for .recv
@@ -226,15 +226,20 @@ class SocketBridge(object):
                 # log.debug('socks_rd: %s, socks_wr:%s', len(socks_rd), len(socks_wr))
 
             if not socks_rd and not self.send_buff:  # reduce CPU in low traffic
-                time.sleep(0.01)
+                time.sleep(0.005)
             # log.debug('got rd:%s wr:%s', socks_rd, socks_wr)
 
             # ----------------- RECEIVING ----------------
+            # For prevent high CPU at slow network environment, we record if there is any
+            #   success network operation, if we did nothing in single loop, we'll sleep a while.
+            _stuck_network = True
+
             for s in socks_rd:  # type: socket.socket
                 # if this socket has non-sent data, stop recving more, to prevent buff blowing up.
                 if self.map[s] in self.send_buff:
                     # log.debug('delay recv because another too slow %s', self.map.get(s))
                     continue
+                _stuck_network = False
 
                 try:
                     received = s.recv(RECV_BUFFER_SIZE)
@@ -263,6 +268,8 @@ class SocketBridge(object):
                     if self.map.get(s) not in self.conn_rd:
                         self._wr_shutdown(s)
                     continue
+                _stuck_network = False
+
                 data = self.send_buff.pop(s)
                 try:
                     s.send(data)
@@ -276,6 +283,9 @@ class SocketBridge(object):
                     log.warning('error sending socket %s, %s closing', repr(e), s)
                     self._wr_shutdown(s)
                     continue
+
+            if _stuck_network:  # slower at bad network
+                time.sleep(0.001)
 
     def _sel_disable_event(self, conn, ev):
         try:
