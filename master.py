@@ -163,9 +163,11 @@ class Master(object):
         ctx.verify_mode = ssl.CERT_NONE
 
         _certfile = tempfile.mktemp()
-        open(_certfile, 'w').write(_DEFAULT_SSL_CERT)
+        with open(_certfile, 'w') as fw:
+            fw.write(_DEFAULT_SSL_CERT)
         _keyfile = tempfile.mktemp()
-        open(_keyfile, 'w').write(_DEFAULT_SSL_KEY)
+        with open(_keyfile, 'w') as fw:
+            fw.write(_DEFAULT_SSL_KEY)
         ctx.load_cert_chain(_certfile, _keyfile)
         os.remove(_certfile)
         os.remove(_keyfile)
