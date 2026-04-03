@@ -236,3 +236,38 @@ crashlytics.properties
 crashlytics-build.properties
 fabric.properties
 /slaver_singlefile.py
+
+# Testing related
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.hypothesis/
+pytest_cache/
+.tox/
+
+# Claude settings
+.claude/*
+
+# Poetry
+# Note: poetry.lock should be committed to version control
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
