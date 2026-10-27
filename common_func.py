@@ -109,28 +109,42 @@ def try_close(closable):
 
 
 def select_recv(conn, buff_size, timeout=None):
-    """add timeout for socket.recv()
+    """Receive exactly buff_size bytes, with an optional overall timeout.
     :type conn: socket.socket
     :type buff_size: int
     :type timeout: float
     :rtype: Union[bytes, None]
     """
-    if selectors:
-        sel = selectors.DefaultSelector()
+    clock = getattr(time, "monotonic", time.time)
+    deadline = None if timeout is None else clock() + timeout
+    chunks = []
+    received_size = 0
+    sel = selectors.DefaultSelector() if selectors else None
+    if sel:
         sel.register(conn, EVENT_READ)
-        events = sel.select(timeout)
-        sel.close()
-        if not events:
-            # timeout
-            raise RuntimeError("recv timeout")
-    else:
-        rlist, _, _ = select.select([conn], [], [], timeout)
 
-    buff = conn.recv(buff_size)
-    if not buff:
-        raise RuntimeError("received zero bytes, socket was closed")
+    try:
+        while received_size < buff_size:
+            remaining = None if deadline is None else max(0, deadline - clock())
+            if sel:
+                events = sel.select(remaining)
+                if not events:
+                    raise RuntimeError("recv timeout")
+            else:
+                rlist, _, _ = select.select([conn], [], [], remaining)
+                if not rlist:
+                    raise RuntimeError("recv timeout")
 
-    return buff
+            buff = conn.recv(buff_size - received_size)
+            if not buff:
+                raise RuntimeError("received zero bytes, socket was closed")
+            chunks.append(buff)
+            received_size += len(buff)
+    finally:
+        if sel:
+            sel.close()
+
+    return b"".join(chunks)
 
 
 def set_secretkey(key):
